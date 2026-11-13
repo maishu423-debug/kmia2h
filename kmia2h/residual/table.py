@@ -22,8 +22,11 @@ def load(cfg) -> dict:
         ac = json.loads(path("params", "residual_acov.json").read_text())
         t = {k: {**DEFAULTS, **residual_fit.ou_params(v, cfg)} for k, v in ac.items()}
     k = float(cfg["residual"].get("sigma_scale", 1.0))
-    if k != 1.0:
-        t = {g: {**v, "sigma_f": v["sigma_f"] * k, "sigma_s": v["sigma_s"] * k} for g, v in t.items()}
+    kd = float(cfg["residual"].get("sigma_scale_day", k))   # step 6: daytime re-tune
+
+    def scale(g):
+        return kd if g.split("|")[1] == "True" else k
+    t = {g: {**v, "sigma_f": v["sigma_f"] * scale(g), "sigma_s": v["sigma_s"] * scale(g)} for g, v in t.items()}
     return t
 
 

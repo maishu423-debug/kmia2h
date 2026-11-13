@@ -125,3 +125,23 @@ Checks:
 - Blend weights on MOS are 0.65-0.95 (all 0.90). No group hit 0 or 1.
 - Reliability (2024, blended): |observed - predicted| < 0.05 in every decile with n > 100. Logged exceptions are sparse top deciles: high 0.6-0.7 (n = 801, +0.048), high 0.7-0.8 (n = 50, +0.068), low 0.6-0.7 (n = 42, -0.103), low 0.7-0.8 (n = 4).
 - Raw-ensemble rank histogram of the realised H_r among path maxima (2024) is U-shaped: 20% in each outer decile. The raw ensemble is too narrow, and the calibration widens it by 1.3x at night and 1.6-1.8x by day. Day also gets a +0.2 F (high) and +0.6 F (low) shift.
+
+## REBUILD step 5 — gridded downloads (lean plan), 2022-01-01 to 2024-12-31
+
+| Source | What was read | Result | Wall time (8 vCPU, shared) |
+| --- | --- | --- | --- |
+| GOES-16 ABI L2 CONUS | ACMC + ACHAC at every 30-min origin plus one scan ~10 min earlier; CODC by day; HDF5 range reads of a +-100 km Miami box | 1,096 / 1,096 days, 52,455 origin rows (47.9 / day), station cloud fraction present 99.9%, cloud-top height 66.8%, optical depth 40.4% (day only) -> `store/goes_feat.parquet` (13 MB) | ~2.3 h (threads did not scale under h5py; switched to 10 processes) |
+| HRRR | own `.idx` byte-range reader: TMP 2 m, UGRD/VGRD 10 m at leads 90-270 min (30-min steps) from wrfsubhf; TCDC entire atmosphere from hourly wrfsfc f01-f05, stored as 0-1 fraction | 26,304 / 26,304 cycles, 236,736 rows -> `store/nwp_point.parquet` (9 MB) | ~3.3 h (6 then 14 processes; network-latency bound) |
+| MRMS MergedReflectivityQCComposite | file <= origin - 10 min and one ~10 min earlier, decoded in memory, sector/ring max / mean / frac >= 35 dBZ and motion | see step 6 | decode-bound (~0.85 s / file) |
+
+No raw satellite, radar or NWP file is kept (0 `.nc` / `.grib2` files under `data/`). The disk in use is 3.4 GB of the 100 GB budget. No day was missing, so no `avail=False` day markers were needed. A source that is stale at an origin (GOES > 40 min, MRMS > 30 min, HRRR cycle > 6 h) gives `avail_<source> = 0` in the Phase 8 frame. Every wait loop waited for the downloader process to exit (`kill -0 <pid>`), not for a file count.
+
+**GOES cloud-motion threshold, tuned on 2022-2023** (`params/cloud.json`). Station cloud fraction 30-120 min ahead, mean absolute error:
+
+| Motion source | MAE |
+| --- | --- |
+| GOES motion whenever valid (q > 0, 96% of origins) — **chosen** | 0.175 |
+| 1.5 x 10 m wind only | 0.203 |
+| Persistence of the current station cloud fraction | 0.176 |
+
+GOES advection barely beats persistence, so the advected cloud field carries little 2-hour skill at KMIA.

@@ -18,6 +18,11 @@ TERMS = {"none": (), "cloud": ("cloud",), "advection": ("advection",), "rain": (
 def scaled(w: dict, mask: np.ndarray, prior: dict) -> dict:
     """Model forcing with day/night x sector ratios applied minute by minute."""
     F = {c: w[f"f_{c}"][mask].astype(float) for c in windows.FCOLS}
+    # cached b_scale is the raw onset ratio; convert to b_onshore / b_group (see forcing.sea_breeze_ratio)
+    from kmia2h.forcing import sea_breeze_ratio
+    days, sects = w["g_is_day"][mask] == "True", w["g_sector"][mask]
+    F["b_scale"] = np.vstack([sea_breeze_ratio(F["b_scale"][i], days[i], sects[i], prior) for i in range(len(days))]) \
+        if len(days) else F["b_scale"]
     # the group of the origin applies to the whole window, as in the batch fit
     is_day = np.repeat((w["g_is_day"][mask] == "True")[:, None], F["t_adv"].shape[1], 1)
     sect = w["g_sector"][mask]
@@ -57,8 +62,8 @@ def extremes(p: np.ndarray, t_lead: np.ndarray) -> tuple[np.ndarray, np.ndarray]
     return r.max(1), r.min(1)
 
 
-def main():
-    w = windows.load("v1", "2022-01", "2024-12")
+def main(tag: str = "v1"):
+    w = windows.load(tag, "2022-01", "2024-12")
     o = w["origins"]
     fit_mask = o < pd.Timestamp("2024-01-01", tz="UTC")
     wf = {k: (v[fit_mask] if hasattr(v, "__len__") and len(v) == len(o) else v) for k, v in w.items()}
@@ -116,8 +121,9 @@ def main():
                      "bias_H": float(np.nanmean(bh + bgap_h - h_r)), "bias_L": float(np.nanmean(bl + bgap_l - l_r))})
     r = pd.DataFrame(rows)
     a = pd.DataFrame(abl)
-    r.to_csv(out(4, "mean_path_vs_baseline.csv"), index=False)
-    a.to_csv(out(4, "ablation.csv"), index=False)
+    suffix = "" if tag == "v1" else f"_{tag}"
+    r.to_csv(out(4, f"mean_path_vs_baseline{suffix}.csv"), index=False)
+    a.to_csv(out(4, f"ablation{suffix}.csv"), index=False)
     print(r.to_string(index=False))
     piv = a[a.period.str.startswith("valid")].pivot_table(index="group", columns="removed", values=["rmse_H", "rmse_L"])
     print(piv.round(3).to_string())
@@ -125,4 +131,5 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+    main(sys.argv[1] if len(sys.argv) > 1 else "v1")

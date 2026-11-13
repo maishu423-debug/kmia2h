@@ -55,7 +55,51 @@ def calib_spread(samples, base, realised, groups, target, grid=np.round(np.arang
     return out_
 
 
-def assemble(tag: str, first: str, last: str) -> pd.DataFrame:
+def source_features(origins: pd.DatetimeIndex, use) -> pd.DataFrame:
+    """GOES station cloud fraction, max upstream reflectivity within 40 km, HRRR 2 m T at window end,
+    and avail_* flags (False where the source is missing or stale at the origin)."""
+    from kmia2h.sources import MAX_GOES_AGE, MAX_MRMS_AGE
+    o = pd.DataFrame({"origin": origins.astype("datetime64[ns, UTC]")})
+    out = pd.DataFrame(index=origins, data={"cf_disc": np.nan, "max_dbz_up": np.nan, "hrrr_t2m_end": np.nan,
+                                            "avail_goes": 0.0, "avail_mrms": 0.0, "avail_hrrr": 0.0})
+    if "goes" in use and store("goes_feat.parquet").exists():
+        g = pd.read_parquet(store("goes_feat.parquet"), columns=["ts_utc", "available_at", "cf_disc"])
+        g = g[g.cf_disc.notna()].astype({"available_at": "datetime64[ns, UTC]", "ts_utc": "datetime64[ns, UTC]"})
+        m = pd.merge_asof(o, g.sort_values("available_at"), left_on="origin", right_on="available_at")
+        fresh = (m.origin - m.ts_utc) <= MAX_GOES_AGE
+        out["cf_disc"] = m.cf_disc.where(fresh).to_numpy()
+        out["avail_goes"] = fresh.astype(float).to_numpy()
+    if "mrms" in use and store("mrms_feat.parquet").exists():
+        mr = pd.read_parquet(store("mrms_feat.parquet"))
+        cols = [c for c in mr.columns if c.startswith("maxdbz_s") and int(c[-1]) <= 2]
+        mr["max_up"] = mr[cols].max(axis=1)
+        mr = mr[["ts_utc", "available_at", "max_up"]].astype({"available_at": "datetime64[ns, UTC]", "ts_utc": "datetime64[ns, UTC]"})
+        m = pd.merge_asof(o, mr.sort_values("available_at"), left_on="origin", right_on="available_at")
+        fresh = (m.origin - m.ts_utc) <= MAX_MRMS_AGE
+        out["max_dbz_up"] = m.max_up.where(fresh).to_numpy()
+        out["avail_mrms"] = fresh.astype(float).to_numpy()
+    if "hrrr" in use and store("nwp_point.parquet").exists():
+        h = pd.read_parquet(store("nwp_point.parquet"), columns=["cycle_utc", "valid_utc", "t2m"])
+        h = h[h.t2m.notna()].astype({"cycle_utc": "datetime64[ns, UTC]", "valid_utc": "datetime64[ns, UTC]"})
+        h["available_at"] = h.cycle_utc + pd.Timedelta(minutes=CFG.latency_min.hrrr)
+        h["cyc_naive"] = h.cycle_utc.dt.tz_convert(None).astype("datetime64[ns]")
+        cyc = {k: g for k, g in h.groupby("cyc_naive")}
+        lat = pd.Timedelta(minutes=CFG.latency_min.hrrr)
+        cycles = np.unique(h.cyc_naive.to_numpy())
+        end = origins + pd.Timedelta(minutes=CFG.sim.horizon_min)
+        vals, av = [], []
+        for t, e in zip(origins, end):
+            i = np.searchsorted(cycles, (t - lat).tz_convert(None).as_unit("ns").to_datetime64(), side="right") - 1
+            if i < 0 or t - pd.Timestamp(cycles[i], tz="UTC") > pd.Timedelta(hours=6):
+                vals.append(np.nan); av.append(0.0); continue
+            g = cyc[pd.Timestamp(cycles[i])]
+            vals.append(float(np.interp(e.as_unit("ns").value, g.valid_utc.astype("datetime64[ns, UTC]").astype("int64").to_numpy(), g.t2m.to_numpy())))
+            av.append(1.0)
+        out["hrrr_t2m_end"], out["avail_hrrr"] = vals, av
+    return out
+
+
+def assemble(tag: str, first: str, last: str, use=None) -> pd.DataFrame:
     b = backtest.load(tag, first, last)
     w = windows.load("v1", first, last)
     wt = pd.DataFrame({"h_r": w["y_h_r"], "l_r": w["y_l_r"], "hi": w["y_hi"], "lo": w["y_lo"]}, index=w["origins"])
@@ -68,7 +112,9 @@ def assemble(tag: str, first: str, last: str) -> pd.DataFrame:
         d[k] = b[k]
     d["ens_spread"] = d.spread
     d["t_adv_anom"] = d.t_adv_mean - d.t_last
-    d["cf_disc"], d["max_dbz_up"], d["hrrr_t2m_end"] = np.nan, np.nan, np.nan
+    sf = source_features(pd.DatetimeIndex(d.index), use or ())
+    for c in ("cf_disc", "max_dbz_up", "hrrr_t2m_end", "avail_goes", "avail_mrms", "avail_hrrr"):
+        d[c] = sf[c].to_numpy()
     for c, vals in (("season", ["wet", "dry"]), ("sky_class", ["clear", "sct", "bkn", "ovc"]),
                     ("sector", ["onshore", "offshore", "other"])):
         for v in vals:
@@ -76,7 +122,6 @@ def assemble(tag: str, first: str, last: str) -> pd.DataFrame:
     d["regime_is_day"] = d.is_day.astype(float)
     d["avail_neighbours"] = d.avail_neighbours.astype(float)
     d["avail_ndbc"] = d.avail_ndbc.astype(float)
-    d["avail_goes"], d["avail_mrms"], d["avail_hrrr"] = 0.0, 0.0, 0.0
     d = d.reset_index(drop=True)
     return d, b
 
@@ -97,9 +142,9 @@ def floor_baseline(d: pd.DataFrame) -> dict:
     return res
 
 
-def main(tag: str = "v2", reuse: bool = False):
+def main(tag: str = "v2", reuse: bool = False, use=()):
     cfg = model_cfg()
-    d, b = assemble(tag, "2022-01", "2024-12")
+    d, b = assemble(tag, "2022-01", "2024-12", use)
     ok = d.h_r.notna() & d.l_r.notna()
     d, mx, mn = d[ok].reset_index(drop=True), b["max_u"][ok.to_numpy()], b["min_u"][ok.to_numpy()]
     train_m = (d.origin < pd.Timestamp("2024-01-01", tz="UTC")).to_numpy()

@@ -51,6 +51,11 @@ def model_cfg() -> dict:
     cp = path("params", "cloud.json")
     if cp.exists():
         cfg["physics"]["cloud"]["motion_q_min"] = float(json.loads(cp.read_text())["motion_q_min"])
+    rf = path("params", "rain.json")
+    if rf.exists():
+        r = json.loads(rf.read_text())
+        cfg["physics"]["rain"]["drop_coef"] = r["drop_coef"]
+        cfg["physics"]["rain"]["drop_sigma_f"] = r["drop_sigma_f"]
     rp = path("params", "residual.json")
     if rp.exists():
         # REBUILD step 3: the step check uses the 99.9th percentile of fitted jumps (warning only)
@@ -160,6 +165,19 @@ def regime_of(inp: Inputs, origin: pd.Timestamp, st: dict | None = None) -> dict
             "wind": wind_bucket([st["sknt"]])[0], "sector": sector([st["drct"]], [st["sknt"]])[0]}
 
 
+def sea_breeze_ratio(b_scale_raw, is_day, sect: str, prior: dict | None = None) -> np.ndarray:
+    """Minutes after onset (raw ratio != 1) get b_onshore / b_group, so that after apply_scales
+    multiplies in the group ratio the effective b is exactly b_onshore (no double count)."""
+    prior = load_ode_prior() if prior is None else prior
+    raw = np.asarray(b_scale_raw, float)
+    on = np.abs(raw - 1.0) > 1e-9
+    if prior is None or not on.any():
+        return np.where(on, raw, 1.0)
+    g = prior["groups"].get(f"{'day' if is_day else 'night'}|{sect}", prior["pooled"])
+    b_on = prior.get("b_onshore", g["b"])
+    return np.where(on, b_on / max(g["b"], 1e-9), 1.0)
+
+
 def apply_scales(f: dict, is_day: np.ndarray, sect: str, prior: dict | None = None) -> dict:
     """Raw forcing -> model forcing: multiply in the day/night x sector coefficient ratios."""
     prior = load_ode_prior() if prior is None else prior
@@ -194,6 +212,9 @@ def window_forcing(inp: Inputs, origin: pd.Timestamp, cfg: dict, n: int | None =
                         st["t_last"], hrrr_t2m, hrrr_dir if inp.extra.get("sea_breeze_hrrr") else None)
     if not inp.extra.get("sea_breeze", False):
         up["b_scale"] = np.ones(n)
+    else:
+        up["b_scale"] = sea_breeze_ratio(up["b_scale"], inp.sol["is_day"].reindex([origin]).fillna(False).iloc[0],
+                                         regime_of(inp, origin, st)["sector"])
     goes_row = inp.extra.get("goes_row")(origin) if inp.extra.get("goes_row") else None
     tcdc = tcdc0 = None
     if hr is not None and h is not None and h.get("tcdc") is not None:

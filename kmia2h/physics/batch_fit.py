@@ -57,12 +57,13 @@ def prepare(w: dict, mask: np.ndarray) -> tuple[dict, np.ndarray, np.ndarray]:
     F = {}
     for c in ("s_clr", "c", "t_adv", "t_sky", "r", "kappa_scale"):
         F[c] = w[f"f_{c}"][mask].astype(float)          # raw cache: kappa_scale = kappa_rel
-    F["b_base"] = w["f_b_scale"][mask].astype(float)    # sea-breeze ratio only
+    F["onset"] = np.abs(w["f_b_scale"][mask].astype(float) - 1.0) > 1e-9   # minutes after sea-breeze onset
+    F["b_base"] = np.ones_like(F["t_adv"])               # group fits ignore the switch; b_onshore is fitted below
     m = w["y_m"][mask].astype(float)
     return F, m[:, 0], m[:, 1:]
 
 
-def main(w: dict) -> dict:
+def main(w: dict, out_name: str = "ode_prior.json") -> dict:
     cfg = model_cfg()
     o = w["origins"]
     hourly = (o.minute == 0)
@@ -81,10 +82,48 @@ def main(w: dict) -> dict:
             Fg, t0g, yg = prepare(w, m)
             g = fit_group({k: v[:, 1:] for k, v in Fg.items()}, t0g, yg, cfg, x_pooled)
             groups[f"{'day' if dn == 'True' else 'night'}|{sect}"] = g
+    extra = {}
+    # Thin-cloud kappa (GOES cloud class): grid the thin/thick ratio with the pooled coefficients.
+    thin = F["kappa_scale"] < 0.999
+    if thin.any():
+        ratios = np.round(np.arange(0.1, 1.01, 0.1), 2)
+        def sse(r):
+            Fr = dict(Fs)
+            Fr["kappa_scale"] = np.where(Fs["kappa_scale"] < 0.999, r, 1.0)
+            p = simulate(x_pooled, Fr, t0, cfg)
+            ok = np.isfinite(y)
+            return float(np.mean((p - y)[ok] ** 2))
+        errs = {float(r): sse(r) for r in ratios}
+        r_best = min(errs, key=errs.get)
+        extra["kappa_thin"] = float(r_best * pooled["kappa"])
+        extra["kappa_thick"] = float(pooled["kappa"])
+        extra["kappa_thin_ratio_mse"] = errs
+    # Sea-breeze b multiplier after onset (b_base != 1 marks minutes after onset).
+    onset = F["onset"]
+    if onset.any():
+        rows = onset.any(axis=1)
+        Fo = {k: v[rows][:, 1:] for k, v in F.items()}
+        on = Fo["onset"]
+        g = groups.get("day|onshore", pooled)
+        xg = np.array([g[k] for k in NAMES])
+        mults = [1, 2, 3, 5, 8, 12, 20]
+        def sse_b(mlt):
+            Fr = dict(Fo)
+            Fr["b_base"] = np.where(on, mlt, 1.0)
+            p = simulate(xg, Fr, t0[rows], cfg)
+            ok = np.isfinite(y[rows])
+            return float(np.mean((p - y[rows])[ok] ** 2))
+        eb = {m: sse_b(m) for m in mults}
+        mb = min(eb, key=eb.get)
+        extra["b_onshore"] = float(mb * max(g["b"], 1e-6))
+        extra["b_onshore_mse"] = {str(k): v for k, v in eb.items()}
+        extra["n_onset_windows"] = int(rows.sum())
     vals = {k: [g[k] for g in groups.values()] + [pooled[k]] for k in NAMES}
     bounds = {k: [0.0, float(min(HI[i], 3.0 * max(vals[k]) + 1e-12))] for i, k in enumerate(NAMES[:3])}
     bounds["kappa"] = [0.0, 1.0]
     res = {"pooled": pooled, "groups": groups, "bounds": bounds, "b_onshore": float(CFG.physics.prior.b_onshore),
-           "fit_period": list(CFG.periods.physics_fit), "n_windows": int(base.sum())}
-    path("params", "ode_prior.json").write_text(json.dumps(res, indent=1))
+           "fit_period": list(CFG.periods.physics_fit), "n_windows": int(base.sum()), **extra}
+    if "b_onshore" in extra:
+        res["bounds"]["b"][1] = float(max(res["bounds"]["b"][1], extra["b_onshore"] / max(pooled["b"], 1e-9) * pooled["b"]))
+    path("params", out_name).write_text(json.dumps(res, indent=1))
     return res
