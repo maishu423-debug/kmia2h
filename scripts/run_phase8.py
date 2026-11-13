@@ -6,7 +6,7 @@ from kmia2h.mos import pipeline
 
 tag = sys.argv[1]
 t = time.time()
-sc, st, report, d, res = pipeline.main(tag)
+sc, st, report, d, res = pipeline.main(tag, reuse='--reuse' in sys.argv)
 sc.to_csv(out(8, f"scores_{tag}.csv"), index=False)
 st.to_csv(out(8, f"scores_stratified_{tag}.csv"), index=False)
 json.dump(report, open(out(8, f"report_{tag}.json"), "w"), indent=1, default=lambda o: o.tolist() if hasattr(o, "tolist") else str(o))

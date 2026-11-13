@@ -7,3 +7,5 @@ logs/
 out/**/*.png
 /store/
 *.egg-info/
+models/
+out/**/*.pkl

@@ -88,3 +88,40 @@ Applied: T_adv uncertainty as the filter state `dT_adv` plus the `T_m4` lag (fra
 Before tuning (v2, Phase 3-derived noise): HFMETAR variance 0.64, ensemble-mean RMSE 0.95 F, hump-shaped rank histogram. Pass 1 with the untouched Phase 3 single-OU table: variance 2.0, lag-1 0.60.
 
 **Phase 7**: one 4,000-path run takes 0.18 s; the same origin and seed give identical output; every forecast passes `simulate.validate_forecast` (tables sum to 1); `settle()` of the paths equals the rounded unrounded extreme exactly.
+
+## REBUILD step 4 — Phase 8 without satellite data, scored on 2024
+
+Backtest `v3`: continuous EnKF on live streams (KMIA HFMETAR/METAR, neighbours, VAKF1/FWYF1), METAR cloud fallback, no GOES / MRMS / HRRR; 2,000 paths per 30-minute origin, 2022-2024. Spread calibration and MOS are fitted on 2022-2023. Conformal and blend weights are fitted on 2024, as SPEC Phase 8 prescribes, so the 2024 rows for `mos` and `blend` are in-sample for those two steps. Floor and baseline are the Phase 3 oracle and persistence+trend on the same origins. Scores are mode hit rate / mean bin log-loss (probability floor 1e-4).
+
+| 2024 | High hit | High log-loss | Low hit | Low log-loss | n |
+| --- | --- | --- | --- | --- | --- |
+| Floor (oracle) | 0.820 | 0.452 | 0.838 | 0.428 | 14,366 |
+| Baseline | 0.294 | 2.043 | 0.268 | 2.132 | 14,221 |
+| Raw ensemble | 0.352 | 1.925 | 0.294 | 2.144 | 14,535 |
+| Spread-calibrated physics | 0.351 | 1.790 | 0.310 | 1.962 | 14,535 |
+| MOS (no conformal) | 0.411 | 1.531 | 0.366 | 1.683 | 14,535 |
+| MOS + conformal | 0.417 | 1.512 | 0.371 | 1.658 | 14,535 |
+| **Blended (final)** | **0.419** | **1.496** | **0.375** | **1.650** | 14,535 |
+
+**Against the first build** (floor 0.821/0.451, 0.836/0.425; baseline 0.293/2.054, 0.271/2.127; blended 0.404/1.520, 0.379/1.627):
+
+- Floor and baseline reproduce within 0.003 in hit rate and 0.011 in log-loss. The small differences come from the origin set: this build scores the 30-minute backtest origins, and the first build's exact set is unknown.
+- The blended high is a little better (hit +0.015, log-loss -0.024).
+- The blended low is a little worse (hit -0.004, log-loss +0.023).
+
+**Likely sources of the difference:**
+
+- The filter noise was re-tuned on 2024 with a different grid.
+- The batch-fit groups are by origin.
+- The QC exclusion set differs (spikes are kept).
+
+The model closes about 35% (high) and 28% (low) of the log-loss gap between baseline and floor.
+
+Checks:
+
+- Blended log-loss is below the raw ensemble's for both high and low. **Pass.**
+- No crossed quantiles; all probability tables sum to 1.
+- Conformal central-interval coverage on 2024: 90.0 / 79.9 / 60.0% for the high and 90.0 / 80.0 / 60.1% for the low, at nominal 90 / 80 / 60. Before conformal it was 90.1 / 78.4 / 58.7 and 88.7 / 76.8 / 58.0.
+- Blend weights on MOS are 0.65-0.95 (all 0.90). No group hit 0 or 1.
+- Reliability (2024, blended): |observed - predicted| < 0.05 in every decile with n > 100. Logged exceptions are sparse top deciles: high 0.6-0.7 (n = 801, +0.048), high 0.7-0.8 (n = 50, +0.068), low 0.6-0.7 (n = 42, -0.103), low 0.7-0.8 (n = 4).
+- Raw-ensemble rank histogram of the realised H_r among path maxima (2024) is U-shaped: 20% in each outer decile. The raw ensemble is too narrow, and the calibration widens it by 1.3x at night and 1.6-1.8x by day. Day also gets a +0.2 F (high) and +0.6 F (low) shift.

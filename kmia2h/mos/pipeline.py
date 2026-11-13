@@ -97,7 +97,7 @@ def floor_baseline(d: pd.DataFrame) -> dict:
     return res
 
 
-def main(tag: str = "v2"):
+def main(tag: str = "v2", reuse: bool = False):
     cfg = model_cfg()
     d, b = assemble(tag, "2022-01", "2024-12")
     ok = d.h_r.notna() & d.l_r.notna()
@@ -120,7 +120,12 @@ def main(tag: str = "v2"):
         Sc = med + scale[:, None] * (S - med) + shift[:, None]
         for q in CFG.mos.physics_levels:
             d[f"{qp}_{q:02d}"] = np.quantile(Sc, q / 100.0, axis=1)
-        model = train.train(d[train_m].assign(origin=d.origin[train_m]), tcol, cfg)
+        mp = path("models", f"mos_{side}_{tag}.pkl")
+        if reuse and mp.exists():
+            with open(mp, "rb") as fh:
+                model = pickle.load(fh)
+        else:
+            model = train.train(d[train_m].assign(origin=d.origin[train_m]), tcol, cfg)
         q_all = predict.predict_quantiles(model, d)
         taus = model.taus
         conf = conformal.fit(q_all[val_m], d[tcol].to_numpy()[val_m], taus, groups[val_m], cfg)
@@ -154,15 +159,15 @@ def main(tag: str = "v2"):
                         "coverage_conformal": cov, "coverage_raw_mos": cov_nc, "reliability": rel,
                         "best_iterations": {str(k): v for k, v in model.best_iterations.items()},
                         "crossed": int((np.diff(q_cal, axis=1) < 0).sum())}
-        with open(path("models", f"mos_{side}.pkl"), "wb") as fh:
+        with open(mp, "wb") as fh:
             pickle.dump(model, fh)
         for t, bst in model.boosters.items():
-            bst.save_model(str(path("models", f"mos_{side}_q{int(round(t * 100)):02d}.lgb")))
+            bst.save_model(str(path("models", f"mos_{side}_{tag}_q{int(round(t * 100)):02d}.lgb")))
         report[side]["conformal"] = conf
     path("params", "conformal.json").write_text(json.dumps({s: {"conformal": report[s]["conformal"],
                                                                 "blend_weights": report[s]["blend_weights"],
                                                                 "spread_scale": report[s]["spread_scale"]}
-                                                            for s in report}, indent=1))
+                                                            for s in ("high", "low")}, indent=1))
     fb = floor_baseline(d[val_m])
     rows = []
     for side in ("high", "low"):

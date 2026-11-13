@@ -48,6 +48,9 @@ def model_cfg() -> dict:
         if "kappa_thin" in pr:
             cfg["physics"]["cloud"]["kappa_thin"] = pr["kappa_thin"]
             cfg["physics"]["cloud"]["kappa_thick"] = pr["kappa_thick"]
+    cp = path("params", "cloud.json")
+    if cp.exists():
+        cfg["physics"]["cloud"]["motion_q_min"] = float(json.loads(cp.read_text())["motion_q_min"])
     rp = path("params", "residual.json")
     if rp.exists():
         # REBUILD step 3: the step check uses the 99.9th percentile of fitted jumps (warning only)
