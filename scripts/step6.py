@@ -17,20 +17,20 @@ t = time.time()
 if stage == "goes":
     import subprocess
     subprocess.run(["uv", "run", "python", "scripts/tune_goes_motion.py"], check=True)
+if stage == "mrms":
+    from kmia2h.physics import rain_fit
+    res = rain_fit.main()
+    print("rain fit", res[0] if res else None, flush=True)
 if "--skip-windows" not in sys.argv:
     windows.build(tag, "2022-01", "2024-12", use=use)
 print("windows", round(time.time() - t), flush=True)
 r, a = phase4.main(tag)
 shutil.copy(path("params", "ode_prior.json"), path("params", f"ode_prior_{tag}.json"))
 print("batch fit + phase4", round(time.time() - t), flush=True)
-if stage == "mrms":
-    from kmia2h.physics import rain_fit
-    res = rain_fit.main()
-    print("rain fit", res[0] if res else None, flush=True)
 backtest.run(tag, "2022-01", "2024-12", sources=use, overwrite=True)
 print("backtest", round(time.time() - t), flush=True)
 q = quick_score.main(tag)
-q.to_csv(out("step6", f"score_{tag}.csv"), index=False)
+q.to_csv(out(6, f"step6_score_{tag}.csv").parent.parent / "step6" / f"score_{tag}.csv", index=False)
 pd.set_option("display.width", 200)
 print(q.round(3).to_string(index=False))
 print("took", round(time.time() - t))

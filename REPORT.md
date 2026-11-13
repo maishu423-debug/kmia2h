@@ -145,3 +145,79 @@ No raw satellite, radar or NWP file is kept (0 `.nc` / `.grib2` files under `dat
 | Persistence of the current station cloud fraction | 0.176 |
 
 GOES advection barely beats persistence, so the advected cloud field carries little 2-hour skill at KMIA.
+
+## REBUILD step 6 — GOES, HRRR, sea breeze, MRMS (cumulative), re-tune, Phase 8 rerun
+
+Each addition rebuilt the window cache with its sources, refitted the ODE prior on 2022-2023, reran the full 2022-2024 filter + simulation backtest, and was re-scored on 2024. The scores below are physics only, spread-calibrated on 2022-2023, 2024 bin log-loss (`out/step6/score_*.csv`).
+
+| Stage (cumulative) | High all | High dry day | High wet day | High dry night | High wet night | Low all | Low dry day | Low wet day | Low dry night | Low wet night |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Step 4 (no gridded data) | **1.790** | 2.255 | 2.168 | **1.345** | **1.356** | 1.962 | 2.037 | 2.333 | **1.804** | 1.627 |
+| + GOES cloud advection | 1.796 | 2.239 | 2.171 | 1.361 | 1.376 | 1.961 | 2.049 | 2.321 | 1.802 | 1.628 |
+| + HRRR | 1.796 | 2.248 | 2.178 | 1.349 | 1.376 | 1.968 | 2.019 | 2.312 | 1.841 | 1.657 |
+| + sea-breeze switch | 1.803 | 2.249 | 2.148 | 1.372 | 1.413 | 1.956 | 2.001 | 2.279 | 1.853 | 1.648 |
+| + MRMS rain | 1.792 | **2.241** | **2.131** | 1.368 | 1.397 | **1.920** | **1.983** | **2.198** | 1.842 | **1.614** |
+
+Deterministic mean path on 2024 (RMSE H_r / L_r, F): step 4 1.91 / 1.95; +GOES 1.94 / 1.95; +HRRR 1.97 / 1.96; +sea breeze 1.95 / 1.95; +MRMS 1.94 / 1.91.
+
+What each addition did:
+
+- **GOES**: a small gain for the dry-season daytime high, and a slight loss at night. Advected GOES cloud barely beats persistence of the current station cloud fraction (MAE 0.175 vs 0.176). The thin-cloud kappa fits to 0.6 x thick.
+- **HRRR**: neutral for the high. Daytime lows improve (dry day 2.049 -> 2.019) and night lows get worse (dry night 1.80 -> 1.84). HRRR 2 m T enters as a weak filter observation (sigma 1.5 F) and as the T_adv fallback; its wind sets the upwind set and lag.
+- **Sea breeze**: as intended for the wet-season daytime extremes (high 2.178 -> 2.148, low 2.312 -> 2.279), but it costs the nights. The fitted b_onshore equals the day/onshore b (multiplier 1 is best), so the gain comes from the HRRR-forecast onset and the marine T_adv.
+- **MRMS rain**: the largest single gain, mostly in the low (all 1.956 -> 1.920; wet day 2.279 -> 2.198), with a small gain in the high. Drop regression on 2022-2023, 2,909 projected cells: excess drop = 0.40 + 0.035 (dBZ - 35) - 0.49 frac35 F, residual sd 1.75 F (weak).
+
+Re-tune of daytime noise (all sources but MRMS, which does not enter the filter): the daytime residual scale stays at 0.5 (daytime HFMETAR innovation variance 1.01, lag-1 0.14).
+
+**Phase 8 rerun with all sources** (backtest `s6_mrms`; MOS gains GOES cloud fraction, max upstream dBZ, HRRR T at window end, and avail_goes / avail_mrms / avail_hrrr flags):
+
+| 2024 | High hit | High log-loss | Low hit | Low log-loss |
+| --- | --- | --- | --- | --- |
+| Floor | 0.820 | 0.452 | 0.838 | 0.428 |
+| Baseline | 0.294 | 2.043 | 0.268 | 2.132 |
+| Raw ensemble | 0.352 | 1.922 | 0.292 | 2.072 |
+| Calibrated physics | 0.353 | 1.792 | 0.307 | 1.920 |
+| MOS + conformal | 0.418 | 1.508 | 0.371 | 1.614 |
+| **Blended, step 6** | **0.421** | **1.489** | **0.373** | **1.602** |
+| Blended, step 4 (no gridded data) | 0.419 | 1.496 | 0.375 | 1.650 |
+| Blended, first build | 0.404 | 1.520 | 0.379 | 1.627 |
+
+Blended 2024 log-loss by day/night and season (`out/step6/stratified.csv`):
+
+| | Floor | Baseline | Step 4 blended | Step 6 blended | Change |
+| --- | --- | --- | --- | --- | --- |
+| High, dry day | 0.551 | 2.321 | 1.739 | **1.704** | -0.035 |
+| High, dry night | 0.388 | 1.731 | 1.245 | **1.240** | -0.005 |
+| High, wet day | 0.501 | 2.320 | 1.734 | **1.712** | -0.022 |
+| High, wet night | 0.360 | 1.777 | **1.245** | 1.283 | +0.038 |
+| Low, dry day | 0.459 | 2.101 | 1.645 | **1.580** | -0.065 |
+| Low, dry night | 0.377 | 2.074 | 1.605 | **1.547** | -0.058 |
+| Low, wet day | 0.514 | 2.340 | 1.841 | **1.782** | -0.059 |
+| Low, wet night | 0.354 | 1.991 | 1.481 | **1.479** | -0.002 |
+
+Checks:
+
+- Blended log-loss is below the raw ensemble's for both high and low.
+- No crossed quantiles.
+- Conformal coverage 89.9 / 79.8 / 60.0% (high) and 90.1 / 80.0 / 60.0% (low).
+- Reliability within 0.05 in every decile with n > 100. Sparse top deciles: high 0.7-0.8 (n = 71, +0.074), low 0.6-0.7 (n = 62, +0.07), low 0.7-0.8 (n = 3).
+- Blend weights on MOS are 0.55-0.95.
+- The MOS fits 2022-2023 much better than 2024 (blended 1.35 vs 1.49 for the high, 1.41 vs 1.60 for the low), so there is room to regularise.
+
+## Summary (after REBUILD step 6)
+
+- **Reproduced from the first build:**
+  - The settlement rule: half_up rolling 5-minute average, 99.48% / 98.13% CLI match against 99.46% / 98.07%.
+  - The 1-minute outage pattern: 69% of months at >= 90% coverage.
+  - The settled-gap statistics: +0.29 F high, -0.26 F low.
+  - The 2024 floor and baseline scores, within 0.01 in hit rate and log-loss.
+  - The satellite-free blended model: high 0.419 / 1.496 against 0.404 / 1.520; low 0.375 / 1.650 against 0.379 / 1.627.
+- **With GOES, HRRR, sea breeze and MRMS:** the blended 2024 log-loss improves to 1.489 (high) and 1.602 (low). The low gains most, from MRMS rain pulses and daytime cloud. Gains are concentrated in daytime windows in both seasons. Wet-season nights do not improve, and the wet-night high gets worse (+0.04).
+- **The gap is still large:** the model closes about 36% of the baseline-to-floor log-loss gap for the high and 31% for the low. In hit rate it moves from 0.29 / 0.27 (baseline) to 0.42 / 0.37, against a floor of 0.82 / 0.84.
+- **Open items, logged in BLOCKED.md / here:**
+  - KMIA 1-minute coverage is below the 90% target.
+  - Phase 6 KS against the Phase 3 floor fails (different residual definitions).
+  - The daytime rank histogram is mildly U-shaped before calibration.
+  - METAR (tenths) innovations are over-dispersed: sigma 0.3 F is too small.
+  - Sparse top-decile reliability.
+- 2025-2026 were not used for any fit, tuning or score.
