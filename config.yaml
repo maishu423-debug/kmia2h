@@ -199,7 +199,7 @@ mos:
   feature_columns: [edge_high, edge_low, hour_sin, hour_cos, doy_sin, doy_cos, ens_spread, t_last, t_age_min,
                     trend_30, t_adv_anom, cf_disc, max_dbz_up, hrrr_t2m_end]
   group_prefixes: [regime_, avail_]
-  params: {num_leaves: 31, learning_rate: 0.03, min_data_in_leaf: 20, verbosity: -1, seed: 20261109, deterministic: true, force_col_wise: true, num_threads: 4}
+  params: {num_leaves: 31, learning_rate: 0.03, min_data_in_leaf: 20, verbosity: -1, seed: 20261109, deterministic: true, force_col_wise: true, num_threads: 6}
   max_rounds: 2000
   early_stopping_rounds: 100
   cv_folds: 3

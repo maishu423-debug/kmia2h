@@ -42,12 +42,16 @@ def score(p: np.ndarray, realised: np.ndarray, floor=1e-4) -> dict:
             "n": int(len(p))}
 
 
-def calib_spread(samples, base, realised, groups, grid=np.round(np.arange(0.6, 3.01, 0.05), 2)) -> dict:
+def calib_spread(samples, base, realised, groups, target, grid=np.round(np.arange(0.5, 3.01, 0.05), 2)) -> dict:
+    """Per season x day/night: shift = median(target - sample median), then the deviation scale
+    that minimises bin log-loss (REBUILD step 3, fitted on 2022-2023 only)."""
     out_ = {}
+    sub = samples[:, ::4]
     for g in np.unique(groups):
         m = groups == g
-        best = min(grid, key=lambda s: score(sample_probs(samples[m], base[m], s), realised[m])["logloss"])
-        out_[str(g)] = float(best)
+        shift = float(np.nanmedian(target[m] - np.median(samples[m], axis=1)))
+        best = min(grid, key=lambda s: score(sample_probs(sub[m], base[m], s, shift), realised[m])["logloss"])
+        out_[str(g)] = {"scale": float(best), "shift": shift}
     return out_
 
 
@@ -107,12 +111,13 @@ def main(tag: str = "v2"):
         base = np.floor(np.median(S, axis=1)).astype(int)
         realised = (d[real].to_numpy() - (base - OFF)).astype(int)
         p_raw = sample_probs(S, base, 1.0)
-        sc = calib_spread(S[train_m], base[train_m], realised[train_m], groups[train_m])
-        scale = np.array([sc.get(str(g), 1.0) for g in groups])
-        p_phys = sample_probs(S, base, scale)
+        sc = calib_spread(S[train_m], base[train_m], realised[train_m], groups[train_m], d[tcol].to_numpy()[train_m])
+        scale = np.array([sc.get(str(g), {"scale": 1.0})["scale"] for g in groups])
+        shift = np.array([sc.get(str(g), {"shift": 0.0})["shift"] for g in groups])
+        p_phys = sample_probs(S, base, scale, shift)
         # physics quantile features from the calibrated samples
         med = np.median(S, axis=1, keepdims=True)
-        Sc = med + scale[:, None] * (S - med)
+        Sc = med + scale[:, None] * (S - med) + shift[:, None]
         for q in CFG.mos.physics_levels:
             d[f"{qp}_{q:02d}"] = np.quantile(Sc, q / 100.0, axis=1)
         model = train.train(d[train_m].assign(origin=d.origin[train_m]), tcol, cfg)
@@ -137,6 +142,12 @@ def main(tag: str = "v2"):
         rel = conformal.reliability(p_blend[val_m], rr[val_m])
         cov = {f"{lo:.2f}": conformal.coverage(q_cal[val_m], d[tcol].to_numpy()[val_m], taus, lo) for lo in (0.05, 0.1, 0.2)}
         cov_nc = {f"{lo:.2f}": conformal.coverage(q_all[val_m], d[tcol].to_numpy()[val_m], taus, lo) for lo in (0.05, 0.1, 0.2)}
+        y = d[tcol].to_numpy()
+        rank = (S < y[:, None]).mean(1)
+        report[side + "_rank_hist"] = {"2022-2023": np.histogram(rank[train_m], bins=10, range=(0, 1))[0].tolist(),
+                                       "2024": np.histogram(rank[val_m], bins=10, range=(0, 1))[0].tolist()}
+        rank_c = (Sc < y[:, None]).mean(1)
+        report[side + "_rank_hist_calibrated"] = {"2024": np.histogram(rank_c[val_m], bins=10, range=(0, 1))[0].tolist()}
         res[side] = {"raw": p_raw, "physics": p_phys, "mos_noconf": p_mos_nc, "mos": p_mos, "blend": p_blend,
                      "realised": realised, "base": base}
         report[side] = {"spread_scale": sc, "blend_weights": wts, "blend_flags": conformal.blend_flags(wts),

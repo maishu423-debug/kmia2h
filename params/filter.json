@@ -1,9 +1,11 @@
 {
- "note": "REBUILD step 3: inflation ~1.01 with extra random-walk noise on a, b and the upstream term; sigmas scaled to the batch-fit prior (params/ode_prior.json). Tuned values replace these after the 2024 diagnostics.",
+ "note": "REBUILD step 3 settings, tuned on 2024 (Jan/Apr/Jul/Oct, scripts/tune_filter.py): inflation 1.01; extra random-walk noise on a, b and the upstream offset; T process noise 0.10 F/min; residual OU noise scaled by 0.5 in both the filter and the simulator (one shared table).",
  "filter": {
   "inflation": 1.01,
+  "t_sigma": 0.10,
   "t_adv_sigma": 1.5,
   "coef_rw_sigma": {"a": 1.0e-6, "b": 2.0e-5, "c": 1.0e-6, "kappa": 5.0e-4},
   "init_sigma": {"T": 1.0, "C_eff": 0.2, "X_slow": 0.3, "X_fast": 0.2, "a": 1.5e-5, "b": 3.0e-4, "c": 2.0e-5, "kappa": 0.1}
- }
+ },
+ "residual": {"sigma_scale": 0.5}
 }

@@ -69,7 +69,8 @@ class Geometry:
 
 def regions(geo: Geometry, a: np.ndarray, prefix: str, how: str) -> dict:
     out = {}
-    disc = geo.dist_km <= 5.0
+    # 5 km disc; on coarse grids (10 km cloud-top height) at least the nearest pixel
+    disc = geo.dist_km <= max(5.0, 0.75 * geo.dx_m / 1000.0)
     f = (lambda v: np.nanmean(v)) if how == "mean" else (lambda v: np.nanmedian(v))
     with np.errstate(all="ignore"):
         import warnings
@@ -115,8 +116,15 @@ def motion(a: np.ndarray, b: np.ndarray, dx_m: float, dt_s: float) -> tuple[floa
     R /= np.maximum(np.abs(R), 1e-12)
     c = np.fft.ifft2(R).real
     i, j = np.unravel_index(np.argmax(c), c.shape)
-    di = i if i <= c.shape[0] // 2 else i - c.shape[0]
-    dj = j if j <= c.shape[1] // 2 else j - c.shape[1]
+
+    def sub(cm, c0, cp):  # parabolic sub-pixel refinement of the peak
+        den = cm - 2 * c0 + cp
+        return 0.0 if den == 0 else float(np.clip(0.5 * (cm - cp) / den, -0.5, 0.5))
+    ni, nj = c.shape
+    fi = sub(c[(i - 1) % ni, j], c[i, j], c[(i + 1) % ni, j])
+    fj = sub(c[i, (j - 1) % nj], c[i, j], c[i, (j + 1) % nj])
+    di = (i if i <= ni // 2 else i - ni) + fi
+    dj = (j if j <= nj // 2 else j - nj) + fj
     q = float(c.max())
     # rows increase southward in the ABI fixed grid (y decreases with row)
     return dj * dx_m / dt_s, -di * dx_m / dt_s, q
@@ -124,7 +132,7 @@ def motion(a: np.ndarray, b: np.ndarray, dx_m: float, dt_s: float) -> tuple[floa
 
 def scan_keys(prod: str, t: pd.Timestamp) -> list[tuple[pd.Timestamp, str]]:
     b = bucket(t)
-    d = f"{b}/ABI-L2-{prod}/{t:%Y}/{t.dayofyear:03d}/{t:%H}/"
+    d = f"{b}/ABI-L2-{prod}/{t:%Y}/{t.day_of_year:03d}/{t:%H}/"
     try:
         keys = fs().ls(d)
     except FileNotFoundError:
@@ -132,7 +140,7 @@ def scan_keys(prod: str, t: pd.Timestamp) -> list[tuple[pd.Timestamp, str]]:
     out = []
     for k in keys:
         s = k.split("_s")[1][:13]
-        ts = pd.Timestamp.strptime(s, "%Y%j%H%M%S").tz_localize("UTC")
+        ts = pd.to_datetime(s, format="%Y%j%H%M%S", utc=True)
         out.append((ts, k))
     return sorted(out)
 
@@ -182,15 +190,11 @@ def day_rows(day: pd.Timestamp, geos_cache: dict) -> pd.DataFrame:
     return d
 
 
-def run(first: str, last: str, workers: int = 16) -> None:
+def job(day):
+    """One day in its own process (h5py serialises threads on a global lock)."""
     out = store("goes_days")
-    out.mkdir(exist_ok=True)
-    days = pd.date_range(first, last, freq="D", tz="UTC")
-    todo = [d for d in days if not (out / f"{d:%Y%m%d}.parquet").exists()]
     geos_cache: dict = {}
-    lock = threading.Lock()
-
-    def job(day):
+    if True:
         t = time.time()
         for attempt in range(3):
             try:
@@ -206,8 +210,15 @@ def run(first: str, last: str, workers: int = 16) -> None:
         d.to_parquet(out / f"{day:%Y%m%d}.parquet")
         print("goes", day.date(), len(d), f"{time.time() - t:.0f}s", flush=True)
 
-    with ThreadPoolExecutor(workers) as ex:
-        list(ex.map(job, todo))
+
+def run(first: str, last: str, workers: int = 12) -> None:
+    from concurrent.futures import ProcessPoolExecutor
+    out = store("goes_days")
+    out.mkdir(exist_ok=True)
+    days = pd.date_range(first, last, freq="D", tz="UTC")
+    todo = [d for d in days if not (out / f"{d:%Y%m%d}.parquet").exists()]
+    with ProcessPoolExecutor(workers) as ex:
+        list(ex.map(job, todo, chunksize=1))
 
 
 def build() -> pd.DataFrame:

@@ -66,3 +66,25 @@ Groups are by the origin's day/night, so "night" a is the sunrise heating of win
 | Persistence + trend | 2.73 | 2.78 | 2.24 | 2.48 |
 
 Ablation (2024 RMSE of H_r / L_r with one term removed, `out/phase4/ablation.csv`): longwave matters most for the night low (dry night L 1.50 -> 2.02); removing cloud *improves* the daytime high (dry day H 2.64 -> 2.34, wet day 2.15 -> 2.05), so the held METAR cloud cover is a poor forecast of the next two hours' cloud; rain has no effect (no MRMS yet).
+
+## REBUILD step 3 — earlier fixes, Phases 5-7
+
+Applied: T_adv uncertainty as the filter state `dT_adv` plus the `T_m4` lag (framework state vector); residual refit on observations minus the filter's mean path; jump-detector efficiency correction; step check = 99.9th percentile of fitted jumps (7.29 F, warning only); inflation 1.01 with extra random walk on a, b and the upstream offset; one residual table shared by filter and simulator; spread calibration per season x day/night on 2022-2023 (Phase 8 driver).
+
+**Residual refit** (`params/residual.json`, 78 regimes, X = 1-minute obs - filter mean T, 2016-2023, 3.78 M minutes). X has sd 1.27 F, with slow components (theta 0.04-0.10 /min, i.e. 10-25 min) that the Phase 3 decomposition had removed. Daytime regimes have a negative mean (-0.17 to -0.49 F): the filter's smooth T runs warm by day. 22 regimes have jumps (day, SCT/BKN). The detector efficiency on synthetic series was 1.5-5 (false detections from minute noise and whole-F steps), so the corrected rates are 0.05-0.4 per hour. Phase 6 KS against the Phase 3 floor fails in all regimes (`out/phase6/validation_vs_floor.csv`). This is expected: the two e_H measure different things (DECISIONS.md).
+
+**Filter tuning on 2024** (`scripts/tune_filter.py`, 4 months, 15 settings): T noise 0.10 F/min, residual noise x 0.5.
+
+**Phase 5 checks, 2024** (backtest `v3`, live streams only, 300 members):
+
+| Check | Result | Target |
+| --- | --- | --- |
+| HFMETAR normalised innovation mean / variance / lag-1 | -0.005 / 0.887 / 0.184 | +-0.1 / 0.8-1.2 / < 0.2 — **pass** |
+| METAR (tenths) innovation mean / variance / lag-1 | -0.042 / 1.57 / 0.214 | (not a done-when item; METAR sigma 0.3 F is too small) |
+| Analysis RMSE of T at origin vs 1-minute truth | **0.885 F** vs last HFMETAR 1.020 F (vs last report of any kind 0.883 F) | lower than last HFMETAR — **pass** |
+| Rank histogram chi2 p, by season x day/night | dry night 0.09; dry day, wet day, wet night < 0.001 | p > 0.01 or logged: by day mildly U-shaped (too narrow, ~13-15% in each end decile), wet night slightly biased |
+| Filter run time | ~35 s per month filter-only (~7 min per year) | < 2 h per year — **pass** |
+
+Before tuning (v2, Phase 3-derived noise): HFMETAR variance 0.64, ensemble-mean RMSE 0.95 F, hump-shaped rank histogram. Pass 1 with the untouched Phase 3 single-OU table: variance 2.0, lag-1 0.60.
+
+**Phase 7**: one 4,000-path run takes 0.18 s; the same origin and seed give identical output; every forecast passes `simulate.validate_forecast` (tables sum to 1); `settle()` of the paths equals the rounded unrounded extreme exactly.

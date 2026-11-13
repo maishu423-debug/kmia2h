@@ -69,7 +69,8 @@ def run_month(args) -> str:
     start = pd.Timestamp(year=year, month=month, day=1, tz="UTC")
     end = start + pd.offsets.MonthBegin(1)
     spin = start - pd.Timedelta(hours=cfg["filter"]["spinup_hours"])
-    extra = opts.get("extra_factory", lambda s, e: {})(spin, end)
+    from kmia2h import sources
+    extra = sources.factory(set(opts.get("sources", ())))(spin, end)
     inp = Inputs.load(spin, end, extra=extra)
     minutes = pd.date_range(spin, end, freq="min", tz="UTC", inclusive="left")
     ff = filter_forcing(inp, minutes, cfg)

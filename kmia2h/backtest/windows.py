@@ -49,7 +49,8 @@ def truth(t1: pd.Series, origins: pd.DatetimeIndex, L: int) -> dict:
 
 
 def build_month(args) -> str:
-    tag, year, month, step = args
+    tag, year, month, step = args[:4]
+    use = set(args[4]) if len(args) > 4 else set()
     out = store(f"windows/{tag}")
     out.mkdir(parents=True, exist_ok=True)
     f = out / f"{year}{month:02d}.npz"
@@ -59,7 +60,8 @@ def build_month(args) -> str:
     end = start + pd.offsets.MonthBegin(1)
     origins = pd.date_range(start, end, freq=f"{step}min", inclusive="left")
     cfg = model_cfg()
-    inp = Inputs.load(start, end)
+    from kmia2h import sources
+    inp = Inputs.load(start, end, extra=sources.factory(use)(start - pd.Timedelta(hours=8), end))
     k = pd.read_parquet(store("kmia_1min.parquet"), filters=[("ts_utc", ">=", start - pd.Timedelta(hours=1)),
                                                              ("ts_utc", "<", end + pd.Timedelta(hours=3))])
     t1 = clean(k)
@@ -100,14 +102,14 @@ def load(tag: str, first: str, last: str) -> dict:
     return out
 
 
-def build(tag: str, first: str, last: str, step: int | None = None, workers: int = 8) -> None:
+def build(tag: str, first: str, last: str, step: int | None = None, workers: int = 8, use=()) -> None:
     step = step or CFG.sim.origin_step_backtest_min
     months = pd.period_range(first, last, freq="M")
-    jobs = [(tag, p.year, p.month, step) for p in months]
+    jobs = [(tag, p.year, p.month, step, tuple(use)) for p in months]
     with ProcessPoolExecutor(workers) as ex:
         for r in ex.map(build_month, jobs):
             print(r, flush=True)
 
 
 if __name__ == "__main__":
-    build(sys.argv[1], sys.argv[2], sys.argv[3])
+    build(sys.argv[1], sys.argv[2], sys.argv[3], use=sys.argv[4].split(",") if len(sys.argv) > 4 else ())

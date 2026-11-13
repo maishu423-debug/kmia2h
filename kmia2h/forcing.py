@@ -62,6 +62,8 @@ def model_cfg() -> dict:
                 cfg["filter"][k] = v
         for k, v in f.get("simulate", {}).items():
             cfg["simulate"][k] = v
+        for k, v in f.get("residual", {}).items():
+            cfg["residual"][k] = v
     return cfg
 
 

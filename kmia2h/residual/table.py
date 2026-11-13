@@ -13,11 +13,18 @@ DEFAULTS = {"lam_per_hour": 0.0, "p_drop": 0.5, "mean_drop": 0.0, "mean_rise": 0
 
 
 def load(cfg) -> dict:
+    """Regime table. residual.sigma_scale (tuned on 2024, params/filter.json) scales the OU noise
+    of both components; the filter and the simulator read the same table."""
     p = path("params", "residual.json")
     if p.exists():
-        return json.loads(p.read_text())["regimes"]
-    ac = json.loads(path("params", "residual_acov.json").read_text())
-    return {k: {**DEFAULTS, **residual_fit.ou_params(v, cfg)} for k, v in ac.items()}
+        t = json.loads(p.read_text())["regimes"]
+    else:
+        ac = json.loads(path("params", "residual_acov.json").read_text())
+        t = {k: {**DEFAULTS, **residual_fit.ou_params(v, cfg)} for k, v in ac.items()}
+    k = float(cfg["residual"].get("sigma_scale", 1.0))
+    if k != 1.0:
+        t = {g: {**v, "sigma_f": v["sigma_f"] * k, "sigma_s": v["sigma_s"] * k} for g, v in t.items()}
+    return t
 
 
 def lookup(table: dict, season: str, is_day, sky: str, wind: str) -> dict:
