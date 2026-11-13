@@ -36,10 +36,10 @@ def test_no_lookahead():
     obs = pd.read_parquet(store("obs.parquet"))
     rng = np.random.default_rng(1)
     t0, t1 = pd.Timestamp("2017-01-01", tz="UTC"), pd.Timestamp("2024-12-31", tz="UTC")
-    origins = pd.DatetimeIndex(sorted(t0 + pd.to_timedelta(rng.integers(0, int((t1 - t0).total_seconds() // 600), 1000) * 10, unit="min")))
+    origins = pd.DatetimeIndex(sorted(set(t0 + pd.to_timedelta(rng.choice(int((t1 - t0).total_seconds() // 600), 1000, replace=False) * 10, unit="min"))))
     full = features.Features(obs=obs, ndbc=None).features_at(origins)
     cols = ["t_last", "t_age_min", "trend_30", "dwpf", "sknt", "sky_class", "rain_recent", "nb_KFLL"]
-    for o in origins[::50]:
+    for o in origins[::10]:
         win = obs[(obs.available_at <= o) & (obs.ts_utc > o - pd.Timedelta(hours=6))]
         part = features.Features(obs=win, ndbc=None).features_at(pd.DatetimeIndex([o]))
         a, b = full.loc[o, cols], part.loc[o, cols]

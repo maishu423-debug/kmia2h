@@ -1,0 +1,54 @@
+# Decisions
+
+Open choices taken while building the mathematical framework (SPEC.md Phases 4-8, as scoped by START.md).
+
+| Date | Phase | Decision | Reason |
+| --- | --- | --- | --- |
+| 2026-11-09 | Setup | The framework lives in `framework/`, beside `kmia2h/`, and commits touch only that folder. | START.md asks for a standalone package. `kmia2h/` already holds another line of uncommitted work. |
+| 2026-11-09 | Setup | Tests run on the existing `kmia2h/.venv` (Python 3.12). `framework/pyproject.toml` puts the framework first on the import path. | It already has every dependency, so nothing is installed. |
+| 2026-11-09 | Setup | New constants are in `config.framework.yaml` under new top-level keys only (`physics`, `filter`, `residual`, `simulate`, `mos`, `conformal`). | The file can be appended to the main `config.yaml` with no key collision. |
+| 2026-11-09 | Setup | Values marked PLACEHOLDER in the config are not fitted to anything. | No data is used in this build. The batch fit and tuning on real data replace them. |
+| 2026-11-09 | Setup | `batch_fit.py`, `backtest/`, `run.py`, notebooks and `REPORT.md` numbers are not built. | START.md's scope leaves them out, and they need real data. |
+| 2026-11-09 | Setup | Settlement functions reach the framework as an `ops` object (`interfaces.Target`). | START.md forbids creating `target.py`. The module `kmia2h.target` satisfies the Protocol as it stands. |
+| 2026-11-09 | 4 | `solar.py` adds `clear_sky(index, site)` and keeps `location()`, `compute()` and `cached()` from the main repo's file. | Copying the file over the main one must not break `features.py` and `data/qc.py`. Those three import the main config lazily and are never called by the framework. |
+| 2026-11-09 | 4 | Forcing row i is the value valid at minute origin + i + 1. | One alignment everywhere, matching the 120 settled minutes. |
+| 2026-11-09 | 4 | `T_sky` comes from the Berdahl-Martin clear-sky emissivity and dewpoint (`ode.sky_temperature_f`). | The spec's ODE uses T_sky but never defines it. |
+| 2026-11-09 | 4 | `b_onshore` and the cloud-class kappa enter as forcing multipliers, `b_scale` and `kappa_scale`, relative to the prior. | b and kappa are filter states per member. A multiplier switches regime while keeping each member's estimate. |
+| 2026-11-09 | 4 | Rain rate is `R = D (g' + b g)`, with g a 10-minute ramp then exponential recovery. | The ODE already relaxes T at rate b. This form makes the temperature perturbation exactly `-D g` when b equals the prior; a plain pulse would recover twice. |
+| 2026-11-09 | 4 | A station's lagged value is held at its newest report when `s - lag` is later than anything available at origin. | The forecast minutes have no observations yet, and using later rows would be look-ahead. |
+| 2026-11-09 | 4 | `lam` is a fixed prior, not a filter state. | The spec's state vector lists a, b, c and kappa only. |
+| 2026-11-09 | 4 | Local time for the convective-growth window is LST (UTC-5). | Same convention as the main repo's settlement day. |
+| 2026-11-09 | 5 | T is the smooth ODE state; the sensor sees `Y = T + X_slow + X_fast`; `T_m1..T_m4` hold past Y. | The spec's T(s) = m(s) + X(s). The lags feed `settle()` and 5-minute means, which are sensor quantities. |
+| 2026-11-09 | 5 | The state gains `T_m4`, appended after the spec's twelve elements. | The spec's five-minute mean needs five values, but its state holds only four (T, T-1, T-2, T-3). |
+| 2026-11-09 | 5 | **Deviation from the spec:** T_adv is not assimilated as an observation. Its uncertainty is the appended state `dT_adv`, an AR(1) offset with standard deviation `t_adv_sigma`. | T_adv is a forcing, not a state, so an operator for it does not exist. Treating it as an observation of T would pull T toward a different air mass. |
+| 2026-11-09 | 5 | Inflation applies once per analysis and skips a, b, c and kappa. | Multiplicative inflation of an unobserved coefficient (a at night) grows without limit. The coefficients get spread from their random walk. |
+| 2026-11-09 | 5 | Process noise is a function of (seed, minute) only. | Re-propagating after a late observation repeats the noise rather than adding more. A late observation gives exactly the on-time result (tested). |
+| 2026-11-09 | 5 | Observation error stays at the spec's 0.52 degF for HFMETAR although the exact chain has 0.59 degF. | The spec's value counts the whole-degC step only. The test with real rounding passes at 0.52; tuning on 2024 can change it in config. |
+| 2026-11-09 | 5 | Member paths are smoothed by applying each observation's increment, with a gain from each past minute's covariance with the predicted observation. | Spec step 7 asks for a smoothed path and names no method. This is a fixed-lag ensemble smoother with no extra state. |
+| 2026-11-09 | 5 | C_eff relaxes toward the cloud forcing with `c_relax_min`, and persists if the forcing is NaN. | The spec gives C_eff no dynamics. |
+| 2026-11-09 | 5 | Jumps are not in the filter's process model. | Spec step 1 lists only AR(1) innovations for the filter. Jumps are simulated in Phases 6-7. |
+| 2026-11-09 | 6 | OU steps use the exact AR(1) transition, not Euler-Maruyama. | At theta = 0.5/min, Euler's stationary variance is 33% too wide, which fails the spec's own 5% variance check. |
+| 2026-11-09 | 6 | Jumps are detected on the difference of adjacent 5-minute trailing means, and a run of exceedances counts once at its peak. | A step mid-block in fixed 5-minute blocks splits in two. This measure returns the exact size of a clean step. |
+| 2026-11-09 | 6 | The jump rate has a dead-time correction `obs / (1 - obs * window)`. | Jumps closer than the 5-minute window merge, which undercounted by 11% at 1.5/h. |
+| 2026-11-09 | 6 | The jump threshold is `max(1.0 degF, 3.5 x noise)`, with noise from the lower quartile of the window difference. | At realistic noise a fixed 1 degF fires on ordinary noise, giving false jumps and a false p_drop of 0.55 against a true 0.70. The spec's 1.0 is kept as the floor. |
+| 2026-11-09 | 6 | Known limit: the detector reads low above about 2 jumps/h (about 1.7/h for a true 3/h), since jumps then disturb half of the minutes. | The rate tests cover 0.5-1.5/h. Fix only if Phase 9 shows such regimes matter. |
+| 2026-11-09 | 6 | The variance jumps contribute to X_slow, `lam E[J^2] / (2 theta_s)`, is removed from A_s before sigma_s is computed. | The Phase 3 autocovariance includes it, so the simulator would otherwise count it twice. |
+| 2026-11-09 | 6 | Simulated jumps carry a compensator of `-lam E[J]` per minute. | X is a departure from a centred mean and is zero-mean by construction. Uncompensated one-sided jumps shifted it by about -0.4 degF and biased e_H. |
+| 2026-11-09 | 6 | Minutes near detected jumps are excluded from the kurtosis and Student-t fit. | Otherwise jumps read as heavy-tailed innovations (false nu near 6 on Gaussian data). |
+| 2026-11-09 | 6 | The size distribution is a threshold plus an exponential excess, separately for drops and rises. | The spec asks for a two-sided distribution and names none. |
+| 2026-11-09 | 7 | T is jittered by `jitter_frac` (0.2) of the analysis spread, not the full spread. | Adding the full spread would double the variance of T. |
+| 2026-11-09 | 7 | Upstream uncertainty in paths comes from each member's `dT_adv`; `t_adv_extra_sigma` defaults to 0. | Adding the spec's station std on top would count the same uncertainty twice. |
+| 2026-11-09 | 7 | Cloud perturbation adds the difference between perturbed and unperturbed advection to the mean series. | This keeps anything else in the mean, such as convective growth. |
+| 2026-11-09 | 7 | The lead minutes and elapsed minutes are rounded to whole degF before `settle()`. | Filter states are continuous, and `settle()` expects sensor values. |
+| 2026-11-09 | 7 | `q_max` and `q_min` are quantiles of the unrounded rolling 5-minute extreme, at 5/25/50/75/95. | That matches H_r and L_r, the Phase 8 targets. The spec's example shows three levels, and Phase 8 needs five. |
+| 2026-11-09 | 7 | `forecast_schema.json` is replaced by `simulate.validate_forecast()`, and the sanity checks are returned rather than raised. | START.md scopes Phase 7 to `simulate.py`. A failed check should reach the caller without stopping a backtest. |
+| 2026-11-09 | 7 | To decide on real data: `steps_within_limit` can read False on a normal run, because the exponential jump tail occasionally exceeds 4 degF in one minute across 4,000 paths. Jump sizes are not capped. | A cap would be a number with no data behind it. Once sizes are fitted, either cap `jump_max` or make the check a share of paths. |
+| 2026-11-09 | 8 | Quantile boosting uses a custom pinball objective with a unit Hessian. | LightGBM 4.7 raises an error for monotone constraints on its built-in quantile objective. The spec requires the constraints. |
+| 2026-11-09 | 8 | Boosting starts from the physics median plus a per-quantile offset, so trees fit corrections to the physics. | With a custom objective there is no built-in starting value, and a unit Hessian moves slowly across a 20 degF range. The anchor also keeps predictions rising with the physics median. |
+| 2026-11-09 | 8 | Quantile levels are 0.02, 0.05, 0.10, 0.20 ... 0.90, 0.95, 0.98. | The spec writes "0.10 ... 0.90" without a step; 0.1 is the natural reading. |
+| 2026-11-09 | 8 | The number of rounds comes from 3-fold time-blocked CV, with a 120-minute embargo around each validation block. `num_leaves` and `learning_rate` stay at the spec's defaults. | Windows from origins less than two hours apart overlap, so an embargo is needed to avoid leakage. A hyperparameter grid needs real data. |
+| 2026-11-09 | 8 | Conformal calibration offsets each quantile separately (one order statistic per quantile), not one symmetric interval width. | A symmetric width only widens an interval and cannot remove a bias, which START.md requires. |
+| 2026-11-09 | 8 | The joint table uses deterministic Gauss-Legendre quadrature for the copula. | Library bivariate-normal CDFs are randomised, and runs must be reproducible. |
+| 2026-11-09 | 8 | Impossible cells (high below low) are zeroed and the table is refitted to both marginals by iterative proportional fitting. | Plain renormalising moved the marginals when high and low overlap, as they do on quiet nights, so p_joint disagreed with p_high and p_low. |
+| 2026-11-09 | 8 | Blending, reliability and log-loss live in `conformal.py`. | The repo layout has no separate module for them. |
+| 2026-11-09 | 6 | To flag for real data: Phase 3's X = t1 - m with L = 21 min removes much of a 15-40 min component, so `theta_s` and `A_s` from `residual_acov.json` may be biased. | The spec has that order of operations. The synthetic tests use X without a smooth removed and cannot show this. |

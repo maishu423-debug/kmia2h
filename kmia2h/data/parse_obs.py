@@ -111,11 +111,12 @@ def build(k1: pd.DataFrame | None = None) -> tuple[pd.DataFrame, dict]:
     best = max(stats, key=lambda k: -1 if np.isnan(stats[k]) else stats[k])
     syn = synth_hfmetar(k1, best).dropna()
     # Months with < 90% HFMETAR coverage get synthetic reports where real ones are missing.
-    months = syn.index.to_period("M")
-    cov = kh.groupby(kh.index.tz_localize(None).to_period("M")).size() / syn.groupby(months.tz_localize(None) if hasattr(months, "tz_localize") else months).size()
-    cov = cov.reindex(syn.groupby(syn.index.tz_localize(None).to_period("M")).size().index).fillna(0.0)
-    low = set(cov[cov < CFG.features.hfmetar_synth_min_cov].index)
+    obs_end = d.loc[d.station == CFG.station, "ts_utc"].max()
+    syn = syn[syn.index <= obs_end]
     pm = syn.index.tz_localize(None).to_period("M")
+    expected = pd.Series(pm.unique().days_in_month * 288, index=pm.unique())
+    cov = (kh.groupby(kh.index.tz_localize(None).to_period("M")).size().reindex(expected.index).fillna(0) / expected)
+    low = set(cov[cov < CFG.features.hfmetar_synth_min_cov].index)
     take = syn[pm.isin(low) & ~syn.index.isin(kh.index)]
     s = pd.DataFrame({"station": CFG.station, "ts_utc": take.index, "report_type": np.int8(1), "tmpf": take.values,
                       "synthetic": True})

@@ -54,7 +54,13 @@ def season(ts: pd.DatetimeIndex) -> np.ndarray:
 
 
 def _asof(origins: pd.DataFrame, d: pd.DataFrame, cols: list[str], prefix: str = "") -> pd.DataFrame:
-    d = d.sort_values("available_at")[["available_at", *cols]].rename(columns={c: prefix + c for c in cols})
+    # Ties on available_at: the newest valid time wins, deterministically.
+    keys = ["available_at"] + [k for k in ("ts_utc", "report_type") if k in d.columns and k not in cols]
+    d = d.sort_values(keys, kind="stable")[["available_at", *cols]].rename(columns={c: prefix + c for c in cols})
+    d["available_at"] = d["available_at"].astype(origins["origin"].dtype)
+    for c in d.columns:
+        if isinstance(d[c].dtype, pd.DatetimeTZDtype):
+            d[c] = d[c].astype("datetime64[ns, UTC]")
     return pd.merge_asof(origins, d, left_on="origin", right_on="available_at", direction="backward").drop(
         columns="available_at")
 
@@ -90,6 +96,7 @@ class Features:
             ok = back.ts.notna()
             s = series.reset_index().rename(columns={"ts_utc": "ts", "tmpf": "v"})
             s["ts"] = s["ts"].astype("datetime64[ns, UTC]")
+            back["ts"] = back["ts"].astype("datetime64[ns, UTC]")
             got = pd.merge_asof(back[ok].sort_values("ts"), s, on="ts", direction="backward",
                                 tolerance=pd.Timedelta(minutes=10)).set_index("index")["v"]
             f[f"trend_{m}"] = f.t_last - got.reindex(f.index)

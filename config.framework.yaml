@@ -1,0 +1,131 @@
+# Constants for the mathematical framework (SPEC.md Phases 4-8).
+# Append this file to the main config.yaml: every top-level key here is new there.
+# The framework also reads these existing main keys: target.rounding, target.roll_window,
+# target.roll_min_valid, sim.*, enkf.members, features.sector_onshore, features.sector_offshore,
+# features.wet_months, neighbours, tz_lst_offset_hours.
+#
+# PLACEHOLDER values are not fitted to anything. They give the code a working default until the
+# Phase 4 batch fit, the Phase 5 tuning and the Phase 8 fits replace them on real data.
+physics:
+  sigma_sb: 5.670374419e-8        # W m-2 K-4
+  prior:                          # PLACEHOLDER: replaced by params/ode_prior.json
+    a: 6.0e-5                     # degF/min per W m-2
+    b: 0.01                       # 1/min
+    c: 3.0e-4                     # degF/min per W m-2
+    kappa: 0.7
+    lam: 0.8
+    b_onshore: 0.02               # 1/min
+  bounds:                         # PLACEHOLDER: replaced by the batch-fit bounds
+    a: [0.0, 1.0e-3]
+    b: [0.0, 0.2]
+    c: [0.0, 5.0e-3]
+    kappa: [0.0, 1.0]
+  sky_emissivity: [0.711, 0.56, 0.73]   # Berdahl-Martin, dewpoint in degC / 100
+  cloud:
+    disc_km: 0.0                  # distance assigned to the station disc
+    ring_centres_km: [5.0, 15.0, 30.0, 60.0]
+    outer_km: 80.0
+    n_sectors: 12
+    n_rings: 4
+    motion_q_min: 0.5             # PLACEHOLDER: tuned on 2024
+    wind_factor: 1.5              # spec default
+    relax_min: 30.0               # e-folding toward HRRR cloud beyond outer_km
+    growth_hours_lst: [10, 16]
+    thin_cod_max: 3.0
+    thin_top_m: 8000.0
+    kappa_thin: 0.3               # PLACEHOLDER: fitted in the batch fit
+    kappa_thick: 0.8              # PLACEHOLDER: fitted in the batch fit
+    metar_cover: {CLR: 0.0, SKC: 0.0, NCD: 0.0, FEW: 0.2, SCT: 0.4, BKN: 0.75, OVC: 1.0, VV: 1.0}
+  upstream:
+    idw_power: 1.0
+    max_lag_min: 120.0
+    max_age_min: 120.0
+    sets:
+      onshore: {primary: [VAKF1, FWYF1], fallback: [KFLL]}
+      offshore: {primary: [KTMB, KHST], fallback: []}
+      northerly: {primary: [KOPF, KHWO, KFXE, KFLL, KPMP], fallback: []}
+    marine: {primary: [VAKF1, FWYF1], fallback: [KFLL]}
+    sea_breeze_window_min: 30.0
+    sea_breeze_dew_rise_f: 2.0
+  rain:
+    search_km: 40.0
+    hit_km: 5.0
+    dbz_min: 35.0
+    ramp_min: 10.0                # time for the drop to develop
+    recovery_min: 40.0            # spec default
+    drop_coef: [0.0, 0.1, 5.0]    # PLACEHOLDER: intercept, per dBZ above dbz_min, per unit frac35
+    arrival_sigma_min: 10.0
+    drop_sigma_f: 1.0             # PLACEHOLDER: regression std
+filter:
+  inflation: 1.03                 # spec range 1.02-1.05; tuned on 2024
+  lag_window_min: 30              # members kept for late observations
+  path_window_min: 120            # smoothed member path handed to the simulator
+  spinup_hours: 6
+  c_relax_min: 20.0               # C_eff relaxes toward the cloud forcing
+  c_sigma: 0.01                   # per minute
+  t_sigma: 0.01                   # degF per minute, model error on T
+  t_adv_sigma: 1.0                # PLACEHOLDER: from the Phase 3 residual statistics
+  t_adv_tau_min: 120.0
+  coef_rw_sigma:                  # per minute; PLACEHOLDER: tuned on 2024
+    a: 1.0e-7
+    b: 2.0e-5
+    c: 5.0e-7
+    kappa: 5.0e-4
+  obs_sigma:                      # degF, GOES is a fraction
+    hfmetar: 0.52
+    metar: 0.3
+    goes: 0.15
+    hrrr: 1.5
+  init_sigma:
+    T: 1.0
+    C_eff: 0.2
+    X_slow: 0.3
+    X_fast: 0.2
+    a: 2.0e-5
+    b: 0.005
+    c: 1.0e-4
+    kappa: 0.15
+residual:
+  quantisation_var: 0.08333333333  # 1/12 degF^2 from whole-degF sensor values
+  min_weight: 0.1                  # below this a component is dropped (single OU)
+  acf_maxlag: 90
+  acf_p0: [0.6, 0.3, 0.4, 0.04]
+  acf_maxfev: 20000
+  jump_window_min: 5
+  jump_threshold_f: 1.0
+  jump_noise_z: 3.5                # the threshold is at least this many noise std of the window difference
+  jump_sky: [sct, bkn]
+  kurtosis_limit: 1.0
+  tail_sample: 20000
+  ks_limit: 0.05
+simulate:
+  jitter_frac: 0.2                # T jitter as a fraction of the analysis spread
+  cloud_sigma: 0.1                # per path, held through the path
+  motion_sigma_ms: 1.5            # PLACEHOLDER: uncertainty of the cloud-motion vector
+  t_adv_extra_sigma: 0.0          # the member state dT_adv already carries upstream uncertainty
+  quantiles: [5, 25, 50, 75, 95]
+  max_step_f: 4.0                 # sanity: largest one-minute move outside a rain pulse
+  max_obs_gap_f: 2.0              # sanity: ensemble mean at +1 min against the latest observation
+mos:
+  quantiles: [0.02, 0.05, 0.10, 0.20, 0.30, 0.40, 0.50, 0.60, 0.70, 0.80, 0.90, 0.95, 0.98]
+  physics_levels: [5, 25, 50, 75, 95]
+  feature_columns: [edge_high, edge_low, hour_sin, hour_cos, doy_sin, doy_cos, ens_spread, t_last, t_age_min,
+                    trend_30, t_adv_anom, cf_disc, max_dbz_up, hrrr_t2m_end]
+  group_prefixes: [regime_, avail_]
+  params: {num_leaves: 31, learning_rate: 0.03, min_data_in_leaf: 20, verbosity: -1, seed: 20261109, deterministic: true, force_col_wise: true, num_threads: 4}
+  max_rounds: 2000
+  early_stopping_rounds: 100
+  cv_folds: 3
+  embargo_min: 120                # windows overlap for two hours
+  min_tail_scale_f: 0.05
+  quantile_eps: 1.0e-6
+  bin_offset: 15
+  copula_nodes: 16
+  copula_z_max: 8.0
+  copula_rho_max: 0.999
+  copula_ipf_iterations: 200
+conformal:
+  min_group_n: 50
+  all_group: __all__
+  blend_step: 0.05
+  p_floor: 1.0e-6
