@@ -39,3 +39,30 @@ L = 21 min, fit 2016-2023, scored on 2024 (n = 43,434 windows). `out/phase3/summ
 Floor and baseline reproduce within 0.01 in hit rate and 0.02 in log-loss. Differences come from the QC exclusion set and the windows that pass the missing-minute rule. Mean e_H = settled-high gap is in `params/floor.json` per regime.
 
 Residual autocovariance: X = t1 - m with a centred 21-minute mean has a negative lobe at lags 5-10 and almost no structure past 15 min, so the two-exponential fit over 90 lags was degenerate (kept in `out/phase3/residual_acov_fullfit.json`). `params/residual_acov.json` holds a single-exponential fit on lags before the first zero crossing (theta ~ 0.85/min). The residual process used downstream is refitted on observations minus the filter's mean path (REBUILD step 3), not taken from this.
+
+## REBUILD step 2 — framework merge and Phase 4 batch fit
+
+Framework (`framework.tgz`) merged per INTERFACES.md: package files copied over `kmia2h/`, tests into `tests/`, `config.framework.yaml` appended to `config.yaml`. All 174 framework tests pass on the merged repo. Additions: `forcing.py` (live-only window and continuous forcing), `backtest/windows.py` (per-origin forcing + truth cache), `physics/batch_fit.py`, optional `c_scale` forcing (DECISIONS.md).
+
+Batch fit, 2022-2023 hourly origins (15,261 windows), METAR sky-cover cloud fallback, KMIA METAR wind standing in for HRRR wind. All groups converge and sit inside bounds (`params/ode_prior.json`):
+
+| Group | a (F/min per W/m2) | b (1/min) | c | kappa | lam | RMSE (F) | n |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| pooled | 4.37e-5 | 5.6e-4 | 6.8e-5 | 0.91 | 0.00 | 1.73 | 15,261 |
+| day / onshore | 7.58e-5 | 5.7e-3 | 2.1e-4 | 0.61 | 0.00 | 1.71 | 4,479 |
+| day / offshore | 5.27e-5 | 0 | 1.3e-4 | 0.59 | 0.00 | 2.29 | 1,311 |
+| day / other | 5.29e-5 | 0 | 0 | 0.93 | 1.00 | 2.51 | 1,926 |
+| night / onshore | 5.6e-4 | 8.7e-4 | 1.0e-4 | 0.60 | 0.32 | 0.83 | 3,404 |
+| night / offshore | 6.6e-4 | 0 | 1.8e-4 | 0.64 | 0.24 | 0.96 | 1,280 |
+| night / other | 7.5e-4 | 9.5e-4 | 7.2e-5 | 0.51 | 0.07 | 1.05 | 2,861 |
+
+Groups are by the origin's day/night, so "night" a is the sunrise heating of windows that start before dawn. Only day/onshore has a material relaxation to the upstream air (b = 0.0057/min, ~3 h); offshore and "other" fit b = 0, which says the lagged neighbour/buoy temperature (with METAR wind) carries no signal there that the trend does not.
+
+2024, deterministic mean path from the last live KMIA observation (no filter, no noise), extremes + regime median gap:
+
+| 2024 (n = 14,649) | Path RMSE vs smooth | Path RMSE vs 1-min | RMSE H_r | RMSE L_r |
+| --- | --- | --- | --- | --- |
+| **ODE mean path** | **1.76** | **1.84** | **1.91** | **1.95** |
+| Persistence + trend | 2.73 | 2.78 | 2.24 | 2.48 |
+
+Ablation (2024 RMSE of H_r / L_r with one term removed, `out/phase4/ablation.csv`): longwave matters most for the night low (dry night L 1.50 -> 2.02); removing cloud *improves* the daytime high (dry day H 2.64 -> 2.34, wet day 2.15 -> 2.05), so the held METAR cloud cover is a poor forecast of the next two hours' cloud; rain has no effect (no MRMS yet).

@@ -184,6 +184,7 @@ residual:
   kurtosis_limit: 1.0
   tail_sample: 20000
   ks_limit: 0.05
+  nu_min: 3.0                      # Student-t needs nu > 2 for unit variance (DECISIONS.md)
 simulate:
   jitter_frac: 0.2                # T jitter as a fraction of the analysis spread
   cloud_sigma: 0.1                # per path, held through the path

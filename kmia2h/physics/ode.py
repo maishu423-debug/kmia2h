@@ -15,7 +15,7 @@ import pandas as pd
 from scipy.integrate import solve_ivp
 
 FORCING = ("s_clr", "c", "t_adv", "t_sky", "r")
-OPTIONAL_FORCING = {"b_scale": 1.0, "kappa_scale": 1.0}
+OPTIONAL_FORCING = {"b_scale": 1.0, "kappa_scale": 1.0, "c_scale": 1.0}
 TERMS = ("solar", "advection", "longwave", "rain")
 
 
@@ -42,7 +42,7 @@ def terms(t, coef: Mapping, f: Mapping, cfg: Mapping) -> dict:
     return {
         "solar": coef["a"] * f["s_clr"] * (1.0 - kappa * f["c"]),
         "advection": -b * (t - f["t_adv"]),
-        "longwave": -coef["c"] * cfg["physics"]["sigma_sb"] * longwave * (1.0 - coef["lam"] * f["c"]),
+        "longwave": -coef["c"] * f.get("c_scale", 1.0) * cfg["physics"]["sigma_sb"] * longwave * (1.0 - coef["lam"] * f["c"]),
         "rain": -f["r"],
     }
 

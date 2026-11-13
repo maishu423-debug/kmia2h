@@ -79,10 +79,11 @@ def _integrate(x: np.ndarray, forcing: Mapping, c_path: np.ndarray, r_path: np.n
     d_adv = x[:, IDX["dT_adv"]] + extra
     b_scale = np.broadcast_to(np.asarray(forcing.get("b_scale", 1.0), float), (n,))
     k_scale = np.broadcast_to(np.asarray(forcing.get("kappa_scale", 1.0), float), (n,))
+    c_scale = np.broadcast_to(np.asarray(forcing.get("c_scale", 1.0), float), (n,))
     out = np.zeros((len(x), n))
     for i in range(n):
         f = {"s_clr": forcing["s_clr"][i], "c": c_eff, "t_adv": forcing["t_adv"][i] + d_adv * np.exp(-i / tau_adv),
-             "t_sky": forcing["t_sky"][i], "r": r_path[:, i], "b_scale": b_scale[i], "kappa_scale": k_scale[i]}
+             "t_sky": forcing["t_sky"][i], "r": r_path[:, i], "b_scale": b_scale[i], "kappa_scale": k_scale[i], "c_scale": c_scale[i]}
         t = ode.euler_step(t, coef, f, cfg)
         c_eff = np.clip(c_eff + (c_path[:, i] - c_eff) / cfg["filter"]["c_relax_min"], 0.0, 1.0)
         out[:, i] = t
