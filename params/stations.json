@@ -1,0 +1,72 @@
+{
+ "KFXE": {
+  "lat": 26.2,
+  "lon": -80.17,
+  "elevation_m": 4.0,
+  "name": "FORT LAUDERDALE",
+  "kind": "asos"
+ },
+ "KFLL": {
+  "lat": 26.07871176,
+  "lon": -80.16223087,
+  "elevation_m": 1.0,
+  "name": "Fort Lauderdale - Hollywood",
+  "kind": "asos"
+ },
+ "KHWO": {
+  "lat": 25.99955,
+  "lon": -80.24119,
+  "elevation_m": 3.0,
+  "name": "HOLLYWOOD/N. PERRY",
+  "kind": "asos"
+ },
+ "KHST": {
+  "lat": 25.48844,
+  "lon": -80.38367,
+  "elevation_m": 2.0,
+  "name": "HOMESTEAD AFB",
+  "kind": "asos"
+ },
+ "KMIA": {
+  "lat": 25.78805,
+  "lon": -80.31693,
+  "elevation_m": 4.0,
+  "name": "MIAMI INTL AIRPORT",
+  "kind": "asos"
+ },
+ "KTMB": {
+  "lat": 25.64227,
+  "lon": -80.43467,
+  "elevation_m": 3.0,
+  "name": "MIAMI/KENDALL-TAMIA",
+  "kind": "asos"
+ },
+ "KOPF": {
+  "lat": 25.91017,
+  "lon": -80.28283,
+  "elevation_m": 3.0,
+  "name": "MIAMI/OPA LOCKA",
+  "kind": "asos"
+ },
+ "KPMP": {
+  "lat": 26.24636,
+  "lon": -80.11103,
+  "elevation_m": 7.0,
+  "name": "POMPANO BEACH",
+  "kind": "asos"
+ },
+ "FWYF1": {
+  "lat": 25.591,
+  "lon": -80.097,
+  "elevation_m": 0.0,
+  "name": "Fowey Rock, FL",
+  "kind": "buoy"
+ },
+ "VAKF1": {
+  "lat": 25.731,
+  "lon": -80.162,
+  "elevation_m": 0.0,
+  "name": "8723214 - Virginia Key, FL",
+  "kind": "buoy"
+ }
+}

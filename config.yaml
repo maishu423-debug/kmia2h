@@ -1,0 +1,84 @@
+# KMIA 2-hour high/low model: all constants (SPEC.md rule 7).
+station: KMIA
+iem_station: MIA
+tz_lst_offset_hours: -5
+neighbours: [KOPF, KFLL, KHWO, KTMB, KHST, KFXE, KPMP]
+buoys: [VAKF1, FWYF1]
+
+periods:
+  station_start: "2016-01-01"
+  gridded_start: "2022-01-01"
+  floor_fit: ["2016-01-01", "2023-12-31"]
+  physics_fit: ["2022-01-01", "2023-12-31"]
+  validation: ["2024-01-01", "2024-12-31"]
+  test_a: ["2025-01-01", "2025-12-31"]      # never used for fitting or scoring in this rebuild
+  test_b: ["2026-01-01", null]
+  data_end: "2026-11-12"
+
+paths:
+  store: data/store
+  raw: data/raw
+  params: params
+  models: models
+  out: out
+  disk_budget_gb: 100
+
+target:
+  rounding: half_up          # confirmed in phase 1 (out/phase1)
+  roll_window: 5
+  roll_min_valid: 4
+  lead_min: 4
+  cli_coverage_min: 0.95
+  max_interp_gap_min: 3
+  max_missing_min: 5
+
+sim:
+  horizon_min: 120
+  lead_min: 4
+  paths_backtest: 2000
+  paths_live: 4000
+  seed: 20261109
+  origin_step_floor_min: 10
+  origin_step_backtest_min: 30
+
+enkf:
+  members: 300
+
+iem:
+  base: https://mesonet.agron.iastate.edu
+  min_interval_s: 2.0
+  retries: 6
+  timeout_s: 180
+
+latency_min:
+  metar: 5
+  hfmetar: 8
+  neighbour: 8
+  ndbc: 20
+  goes: 10
+  mrms: 5
+  hrrr: 90
+
+qc:
+  max_step_f: 4.0
+  flat_minutes: 45
+  min_f: 30.0
+  max_f: 105.0
+  exclude_mask: 6            # RANGE | FLAT. Spikes (1) are kept: the CLI counts them (DECISIONS.md)
+
+features:
+  sector_onshore: [30, 150]
+  sector_offshore: [210, 330]
+  wet_months: [5, 6, 7, 8, 9, 10]
+  wind_buckets_kt: [5, 10, 15]
+  dd_buckets_f: [3, 8, 15]
+  rain_recent_min: 30
+  hfmetar_synth_min_cov: 0.90
+  max_t_age_min: 120
+
+floor:
+  L_primary: 21
+  L_sens: [11, 41]
+  min_regime_n: 300
+  edge_bins: [0.0, 0.1, 0.2, 0.3, 0.5]
+  acov_maxlag: 90
