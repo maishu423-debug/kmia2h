@@ -221,3 +221,37 @@ Checks:
   - METAR (tenths) innovations are over-dispersed: sigma 0.3 F is too small.
   - Sparse top-decile reliability.
 - 2025-2026 were not used for any fit, tuning or score.
+
+## Pre-Phase-9 changes and the frozen configuration
+
+Three changes, each fitted on 2022-2023 and scored on 2024. They were tested in every combination needed to pick the best (`out/pre9/`, `out/phase8/scores_*.csv`).
+
+- **MOS regularisation.** The time-blocked CV on 2022-2023 uses six contiguous four-month blocks with a one-day embargo. It searched a six-point grid of leaves, min rows per leaf, L2 and feature fraction, scored on out-of-fold pinball at τ = 0.1 / 0.5 / 0.9.
+  - High: the current parameters won (31 leaves, min 20).
+  - Low: a mildly regularised model won (15 leaves, min 100, L2 1, feature fraction 0.8).
+  - The heavier candidates lost out of fold.
+  - The choice is frozen as `mos.params_by_target`, so later runs do not repeat the search.
+  - 2024 blended log-loss is unchanged (1.489 / 1.602). The in-sample gap for the low narrows (2022-2023 blended 1.41 → 1.52), so the earlier gap was mostly optimistic fitting, not a loss on 2024.
+- **Hourly METAR obs error.** From the 2022-2023 innovations, σ = 0.60 F (innovation variance 0.606, HPHᵀ ≈ 0.245).
+  - Normalised METAR innovation variance: 1.65 → 0.93 (2022-2023), 1.59 → 0.90 (2024).
+  - But 2024 log-loss is worse with it, in both pairings: +0.010 / +0.004 without the sea-breeze change, +0.009 / +0.001 with it.
+- **Sea-breeze switch in daylight minutes only** (`physics.upstream.sea_breeze_day_only`). The ODE prior was refitted on 2022-2023.
+  - Wet-night high (physics only): 1.422 → 1.384. Dry-night high: 1.400 → 1.379.
+  - Blended high improves by 0.013 to 0.014 in both pairings.
+
+| 2024 blended (hit / log-loss) | High | Low | Sum of log-loss |
+| --- | --- | --- | --- |
+| Step 6 (`s6_mrms`) | 0.421 / 1.489 | 0.373 / 1.602 | 3.091 |
+| + regularised MOS (`s6_mrms_reg`) | 0.420 / 1.489 | 0.368 / 1.602 | 3.091 |
+| + METAR σ 0.6 (`s9_metar`) | 0.414 / 1.499 | 0.367 / 1.606 | 3.105 |
+| + METAR σ 0.6 + daytime sea breeze (`s9_sbday`) | 0.422 / 1.485 | 0.372 / 1.603 | 3.088 |
+| **Daytime sea breeze, METAR σ 0.3 (`s9_sb03`, frozen)** | **0.419 / 1.476** | **0.369 / 1.602** | **3.078** |
+
+**Frozen in `config.yaml` (`frozen:`)**:
+- Regularised MOS.
+- Daytime-only sea breeze.
+- METAR σ kept at 0.3.
+
+The raised METAR error is correct as a description of the innovations, but it costs score. The likely reason is that the tenths-°C METAR is the only sub-degree observation, and the filter benefits from over-weighting it. That is logged in DECISIONS.md.
+
+Floor and baseline on 2024 are unchanged (0.820 / 0.452 and 0.294 / 2.043 high; 0.838 / 0.428 and 0.268 / 2.132 low). Nothing below was tuned after test results were seen.

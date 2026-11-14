@@ -50,6 +50,9 @@ def regime_arrays(table: dict, ff: pd.DataFrame) -> dict:
     return {f: np.array([r[f] for r in rows], float) for f in process_model.REGIME_FIELDS}
 
 
+FORCING_SAVE = ("s_clr", "c", "t_adv", "r", "b_scale", "kappa_scale")
+
+
 def run_month(args) -> str:
     tag, year, month, opts = args
     out = store(f"backtest/{tag}")
@@ -153,6 +156,11 @@ def run_month(args) -> str:
             res["cloud_source"].append(w["cloud_source"])
             res["coef"].append(snap["ensemble"][:, 6:10].mean(0).astype(np.float32))
             res["ensemble"].append(snap["ensemble"].astype(np.float32))
+            if opts.get("save_paths"):  # Phase 9 attribution: 50 sample paths and the forcing terms
+                res["sample_paths"].append(np.asarray(sim.paths[:50], np.int16))
+                res["forcing"].append(np.stack([np.asarray(w["forcing"][c], np.float32) for c in FORCING_SAVE]))
+                rc = w.get("rain_cells")
+                res["n_rain_cells"].append(0 if rc is None else int(len(rc)))
     inn = kf.innovations()
     np.savez_compressed(
         fo, origin=np.array(res["origin"], np.int64), max_u=np.array(res["max_u"]), min_u=np.array(res["min_u"]),
@@ -169,7 +177,10 @@ def run_month(args) -> str:
         forcing_ok=ok_forcing[-int((end - start).total_seconds() // 60):],
         inn_k=inn.valid_k.to_numpy(), inn_kind=inn.kind.to_numpy().astype(str), inn_val=inn.innovation.to_numpy(),
         inn_var=inn.variance.to_numpy(), fail=np.array([f"{a} {b}" for a, b in res["fail"]], dtype=str),
-        seconds=time.time() - t_start)
+        seconds=time.time() - t_start,
+        **({"sample_paths": np.array(res["sample_paths"]), "forcing_terms": np.array(res["forcing"]),
+            "n_rain_cells": np.array(res["n_rain_cells"], np.int16)}
+           if opts.get("save_paths") else {}))
     if opts.get("save_ensembles"):
         np.savez_compressed(store(f"enkf_snapshots/{tag}_{year}{month:02d}.npz").as_posix(),
                             origin=np.array(res["origin"], np.int64), ensemble=np.array(res["ensemble"]))
@@ -187,7 +198,8 @@ def run(tag: str, first: str, last: str, workers: int = 8, **opts) -> None:
 def load(tag: str, first: str, last: str) -> dict:
     months = pd.period_range(first, last, freq="M")
     parts = [np.load(store(f"backtest/{tag}/{p.year}{p.month:02d}.npz"), allow_pickle=False) for p in months]
-    keys = [k for k in parts[0].files if not k.startswith(("inn_", "rec_", "minutes", "forcing_ok", "fail", "seconds"))]
+    keys = [k for k in parts[0].files if not k.startswith(("inn_", "rec_", "minutes", "forcing_ok", "fail", "seconds",
+                                                           "sample_paths", "forcing_terms", "n_rain_cells"))]
     out = {k: np.concatenate([p[k] for p in parts if len(p["origin"])]) for k in keys}
     out["origin"] = from_ns(out["origin"])
     return out

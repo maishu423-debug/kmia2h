@@ -142,7 +142,9 @@ def floor_baseline(d: pd.DataFrame) -> dict:
     return res
 
 
-def main(tag: str = "v2", reuse: bool = False, use=()):
+def main(tag: str = "v2", reuse: bool = False, use=(), name: str | None = None):
+    """name: label for saved models (default: the backtest tag)."""
+    name = name or tag
     cfg = model_cfg()
     d, b = assemble(tag, "2022-01", "2024-12", use)
     ok = d.h_r.notna() & d.l_r.notna()
@@ -165,7 +167,7 @@ def main(tag: str = "v2", reuse: bool = False, use=()):
         Sc = med + scale[:, None] * (S - med) + shift[:, None]
         for q in CFG.mos.physics_levels:
             d[f"{qp}_{q:02d}"] = np.quantile(Sc, q / 100.0, axis=1)
-        mp = path("models", f"mos_{side}_{tag}.pkl")
+        mp = path("models", f"mos_{side}_{name}.pkl")
         if reuse and mp.exists():
             with open(mp, "rb") as fh:
                 model = pickle.load(fh)
@@ -203,13 +205,14 @@ def main(tag: str = "v2", reuse: bool = False, use=()):
         report[side] = {"spread_scale": sc, "blend_weights": wts, "blend_flags": conformal.blend_flags(wts),
                         "coverage_conformal": cov, "coverage_raw_mos": cov_nc, "reliability": rel,
                         "best_iterations": {str(k): v for k, v in model.best_iterations.items()},
+                        "mos_params": getattr(model, "params", None), "mos_selection": getattr(model, "selection", None),
                         "crossed": int((np.diff(q_cal, axis=1) < 0).sum())}
         with open(mp, "wb") as fh:
             pickle.dump(model, fh)
         for t, bst in model.boosters.items():
-            bst.save_model(str(path("models", f"mos_{side}_{tag}_q{int(round(t * 100)):02d}.lgb")))
+            bst.save_model(str(path("models", f"mos_{side}_{name}_q{int(round(t * 100)):02d}.lgb")))
         report[side]["conformal"] = conf
-    path("params", "conformal.json").write_text(json.dumps({s: {"conformal": report[s]["conformal"],
+    path("params", f"conformal_{name}.json").write_text(json.dumps({s: {"conformal": report[s]["conformal"],
                                                                 "blend_weights": report[s]["blend_weights"],
                                                                 "spread_scale": report[s]["spread_scale"]}
                                                             for s in ("high", "low")}, indent=1))
@@ -239,3 +242,46 @@ def main(tag: str = "v2", reuse: bool = False, use=()):
                     strat.append({"side": side, "by": col, "value": str(v), "model": name, **s})
     st = pd.DataFrame(strat)
     return sc, st, report, d, res
+
+
+def apply_frozen(tag: str, first: str, last: str, name: str, use=()) -> tuple[pd.DataFrame, dict]:
+    """Frozen Phase 8 on any period: spread calibration (2022-2023), MOS (2022-2023), conformal and blend
+    weights (2024) are loaded from models/mos_<side>_<name>.pkl and params/conformal_<name>.json.
+    Nothing is fitted. Returns the assembled frame and per-side probabilities on bins base-OFF..base+OFF."""
+    cfg = model_cfg()
+    frozen = json.loads(path("params", f"conformal_{name}.json").read_text())
+    d, b = assemble(tag, first, last, use)
+    ok = d.h_r.notna() & d.l_r.notna()
+    keep = ok.to_numpy()
+    d = d[ok].reset_index(drop=True)
+    groups = group_of(d.season, d.is_day)
+    res = {}
+    for side, S, real, tcol, qp in (("high", b["max_u"][keep], "hi", "h_r", "q_max"),
+                                    ("low", b["min_u"][keep], "lo", "l_r", "q_min")):
+        fz = frozen[side]
+        base = np.floor(np.median(S, axis=1)).astype(int)
+        realised = (d[real].to_numpy() - (base - OFF)).astype(int)
+        sc = fz["spread_scale"]
+        scale = np.array([sc.get(str(g), {"scale": 1.0})["scale"] for g in groups])
+        shift = np.array([sc.get(str(g), {"shift": 0.0})["shift"] for g in groups])
+        p_raw = sample_probs(S, base, 1.0)
+        p_phys = sample_probs(S, base, scale, shift)
+        med = np.median(S, axis=1, keepdims=True)
+        Sc = med + scale[:, None] * (S - med) + shift[:, None]
+        for q in CFG.mos.physics_levels:
+            d[f"{qp}_{q:02d}"] = np.quantile(Sc, q / 100.0, axis=1)
+        with open(path("models", f"mos_{side}_{name}.pkl"), "rb") as fh:
+            model = pickle.load(fh)
+        q_all = predict.predict_quantiles(model, d)
+        q_cal = conformal.apply(q_all, groups, fz["conformal"], cfg)
+        ks = (base[:, None] - OFF) + np.arange(2 * OFF + 1)[None, :]
+        p_mos = np.zeros_like(p_phys)
+        for i in range(len(d)):
+            kk, pp = predict.bin_table(model.taus, q_cal[i], cfg)
+            p_mos[i] = predict.on_bins(predict.to_dict(kk, pp), ks[i])
+        p_mos = p_mos / np.maximum(p_mos.sum(1, keepdims=True), 1e-12)
+        wv = np.array([conformal.blend_weight(fz["blend_weights"], g, cfg) for g in groups])
+        p_blend = wv[:, None] * p_mos + (1 - wv[:, None]) * p_phys
+        res[side] = {"raw": p_raw, "physics": p_phys, "mos": p_mos, "blend": p_blend, "realised": realised,
+                     "base": base, "samples": S, "samples_cal": Sc, "y": d[tcol].to_numpy()}
+    return d, res

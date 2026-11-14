@@ -267,6 +267,9 @@ def mos_cfg():
     c["mos"]["early_stopping_rounds"] = 30
     c["mos"]["params"].update({"num_leaves": 15, "learning_rate": 0.1})
     c["mos"]["quantiles"] = [0.05, 0.25, 0.5, 0.75, 0.95]
+    c["mos"]["cv_folds"], c["mos"]["embargo_min"] = 3, 120
+    c["mos"]["regularise"] = {**c["mos"].get("regularise", {}), "enabled": False}
+    c["mos"]["params_by_target"] = {}
     return c
 
 
@@ -361,3 +364,22 @@ def test_end_to_end_post_processing_tables_sum_to_one(cfg, fitted):
     ks_l, p_l = predict.bin_table(fitted.taus, fixed[0] - 6.0, cfg)
     joint = predict.joint_table(ks, p, ks_l, p_l, 0.5, cfg)
     assert joint.sum() == pytest.approx(1.0, abs=1e-9)
+
+
+def test_regularisation_selection_prefers_the_simpler_model_on_noise(mos_cfg):
+    """Pure-noise extra features: the heavily regularised candidate must win out of fold, and the
+    chosen params are carried into the fitted model."""
+    c = copy.deepcopy(mos_cfg)
+    c["mos"]["quantiles"] = [0.5]
+    c["mos"]["regularise"] = {"enabled": True, "select_taus": [0.5],
+                              "grid": [{"num_leaves": 63, "min_data_in_leaf": 2, "learning_rate": 0.3},
+                                       {"num_leaves": 4, "min_data_in_leaf": 200, "lambda_l2": 10.0}]}
+    f = mos_frame(1500, 7)
+    rng = np.random.default_rng(0)
+    for j in range(20):
+        f[f"regime_noise{j}"] = rng.normal(size=len(f))
+    chosen, table = train.select_params(f, "h_r", c)
+    assert len(table) == 2 and chosen["num_leaves"] == 4
+    assert table[1]["cv_pinball"] < table[0]["cv_pinball"]
+    m = train.train(f, "h_r", c)
+    assert m.params["num_leaves"] == 4 and m.selection is not None

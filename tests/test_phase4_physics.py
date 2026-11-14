@@ -193,6 +193,36 @@ def test_forecast_sea_breeze_switches_t_adv_and_b(cfg):
     assert out["b_scale"][30:] == pytest.approx(p["b_onshore"] / p["b"])
 
 
+
+def test_day_only_sea_breeze_ignores_night_minutes(cfg):
+    import copy
+    c = copy.deepcopy(cfg)
+    c["physics"]["upstream"]["sea_breeze_day_only"] = True
+    hrrr_dir = np.r_[np.full(30, 250.0), np.full(30, 90.0)]
+    d = 20.0 / upstream.EARTH_RADIUS_KM * 180.0 / np.pi
+    meta = {"VAKF1": {"lat": KMIA["lat"], "lon": KMIA["lon"] + d}, "KTMB": {"lat": KMIA["lat"], "lon": KMIA["lon"] - d}}
+    marine, land = ramp_obs("VAKF1", slope=0.0), ramp_obs("KTMB", slope=0.0)
+    marine["tmpf"], land["tmpf"] = 79.0, 90.0
+    obs = pd.concat([marine, land])
+    day = np.r_[np.ones(45, bool), np.zeros(15, bool)]  # sunset at minute 45
+    out = upstream.build(ORIGIN, 60, obs, empty_kmia(), meta, KMIA, 8, 2, c, 75.0, hrrr_dir=hrrr_dir, is_day_min=day)
+    assert out["t_adv"][30:45] == pytest.approx(79.0) and out["t_adv"][45:] == pytest.approx(90.0)
+    assert (out["b_scale"][45:] == 1).all() and (out["b_scale"][30:45] != 1).all()
+    night = upstream.build(ORIGIN, 60, obs, empty_kmia(), meta, KMIA, 8, 2, c, 75.0, hrrr_dir=hrrr_dir,
+                           is_day_min=np.zeros(60, bool))
+    assert (night["b_scale"] == 1).all() and night["t_adv"] == pytest.approx(90.0)
+    # the flag off keeps the old behaviour whatever the daylight mask says
+    off = upstream.build(ORIGIN, 60, obs, empty_kmia(), meta, KMIA, 8, 2, cfg, 75.0, hrrr_dir=hrrr_dir,
+                         is_day_min=np.zeros(60, bool))
+    assert off["t_adv"][30:] == pytest.approx(79.0)
+
+
+def test_dotted_overrides_reach_nested_config(cfg):
+    import copy
+    from kmia2h.forcing import apply_overrides
+    c = apply_overrides(copy.deepcopy(cfg), {"filter.obs_sigma.metar": 0.6, "physics.upstream.sea_breeze_day_only": True})
+    assert c["filter"]["obs_sigma"]["metar"] == 0.6 and c["physics"]["upstream"]["sea_breeze_day_only"] is True
+
 # --- Cloud -------------------------------------------------------------------------------------
 
 def field(cfg, value=0.0):

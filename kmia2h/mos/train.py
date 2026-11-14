@@ -110,6 +110,48 @@ def _best_iteration(x, y, init, tau, monotone, folds, cfg: Mapping) -> int:
     return max(int(np.median(rounds)), 1)
 
 
+def _cv_loss(x, y, anchor, offsets_src, monotone, folds, params_cfg, taus) -> float:
+    """Mean out-of-fold pinball over the selection quantiles, early-stopped inside each fold."""
+    losses = []
+    for tau in taus:
+        for tr, va in folds:
+            off = float(np.quantile(offsets_src[tr], tau))
+            init = anchor + off
+            booster = lgb.train(_params(tau, monotone, params_cfg), _dataset(x[tr], y[tr], init[tr]),
+                                num_boost_round=params_cfg["mos"]["max_rounds"],
+                                valid_sets=[_dataset(x[va], y[va], init[va])], feval=_metric(tau),
+                                callbacks=[lgb.early_stopping(params_cfg["mos"]["early_stopping_rounds"], verbose=False)])
+            q = init[va] + booster.predict(x[va], num_iteration=booster.best_iteration)
+            losses.append(pinball(y[va], q, tau) * len(va))
+    return float(np.sum(losses) / (len(taus) * len(y)))
+
+
+def select_params(df: pd.DataFrame, target: str, cfg: Mapping) -> tuple[dict, list[dict]]:
+    """Regularisation by time-blocked CV on the training rows only (REBUILD pre-Phase-9).
+
+    Each candidate in cfg.mos.regularise.grid overrides cfg.mos.params; the one with the lowest
+    out-of-fold pinball (mean over regularise.select_taus) wins. Folds are contiguous time blocks
+    with an embargo of cfg.mos.embargo_min, so overlapping windows never straddle train and test.
+    """
+    import copy
+    reg = cfg["mos"]["regularise"]
+    d = df[df[target].notna()].reset_index(drop=True)
+    features = feature_list(d, target, cfg)
+    x, y = matrix(d, features), d[target].to_numpy(float)
+    monotone = monotone_constraints(features, target, cfg)
+    folds = time_folds(d["origin"], cfg["mos"]["cv_folds"], cfg["mos"]["embargo_min"])
+    anchor_column = f"{TARGETS[target]}_50"
+    anchor = anchor_values(d, anchor_column, float(d[anchor_column].mean()))
+    table = []
+    for cand in reg["grid"]:
+        c = copy.deepcopy(dict(cfg))
+        c["mos"] = {**cfg["mos"], "params": {**cfg["mos"]["params"], **cand}}
+        loss = _cv_loss(x, y, anchor, y - anchor, monotone, folds, c, reg["select_taus"])
+        table.append({**cand, "cv_pinball": loss})
+    best = min(table, key=lambda r: r["cv_pinball"])
+    return {k: v for k, v in best.items() if k != "cv_pinball"}, table
+
+
 def anchor_values(df: pd.DataFrame, column: str, fill: float) -> np.ndarray:
     return df[column].fillna(fill).to_numpy(float)
 
@@ -123,6 +165,15 @@ def train(df: pd.DataFrame, target: str, cfg: Mapping) -> MosModel:
     x, y = matrix(d, features), d[target].to_numpy(float)
     monotone = monotone_constraints(features, target, cfg)
     m = cfg["mos"]
+    selection = None
+    fixed = (m.get("params_by_target") or {}).get(target)
+    if fixed:  # frozen outcome of an earlier time-blocked selection
+        m = {**m, "params": {**m["params"], **fixed}}
+        cfg = {**dict(cfg), "mos": m}
+    elif m.get("regularise", {}).get("enabled", False):
+        chosen, selection = select_params(d, target, cfg)
+        m = {**m, "params": {**m["params"], **chosen}}
+        cfg = {**dict(cfg), "mos": m}
     folds = time_folds(d["origin"], m["cv_folds"], m["embargo_min"])
     anchor_column = f"{TARGETS[target]}_50"
     fill = float(d[anchor_column].mean())
@@ -133,7 +184,10 @@ def train(df: pd.DataFrame, target: str, cfg: Mapping) -> MosModel:
         init = anchor + offsets[tau]
         best[tau] = _best_iteration(x, y, init, tau, monotone, folds, cfg)
         boosters[tau] = lgb.train(_params(tau, monotone, cfg), _dataset(x, y, init), num_boost_round=best[tau])
-    return MosModel(target, list(m["quantiles"]), features, boosters, best, anchor_column, fill, offsets)
+    model = MosModel(target, list(m["quantiles"]), features, boosters, best, anchor_column, fill, offsets)
+    model.params = dict(m["params"])
+    model.selection = selection
+    return model
 
 
 def pinball(y: np.ndarray, q: np.ndarray, tau: float) -> float:

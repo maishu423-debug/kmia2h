@@ -113,6 +113,8 @@ def build(k1: pd.DataFrame | None = None) -> tuple[pd.DataFrame, dict]:
     # Months with < 90% HFMETAR coverage get synthetic reports where real ones are missing.
     obs_end = d.loc[d.station == CFG.station, "ts_utc"].max()
     syn = syn[syn.index <= obs_end]
+    # Synthesis reads KMIA 1-minute data, which a live run does not have: never in the test periods.
+    syn = syn[syn.index < pd.Timestamp(CFG.periods.test_a[0], tz="UTC")]
     pm = syn.index.tz_localize(None).to_period("M")
     expected = pd.Series(pm.unique().days_in_month * 288, index=pm.unique())
     cov = (kh.groupby(kh.index.tz_localize(None).to_period("M")).size().reindex(expected.index).fillna(0) / expected)

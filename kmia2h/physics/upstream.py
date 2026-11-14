@@ -130,12 +130,14 @@ def sea_breeze_onset(origin: pd.Timestamp, n: int, kmia_obs: pd.DataFrame, dir0:
 
 def build(origin: pd.Timestamp, n: int, obs: pd.DataFrame, kmia_obs: pd.DataFrame, meta: Mapping, kmia: Mapping,
           u10: float, v10: float, cfg: Mapping, t_last: float, hrrr_t2m: np.ndarray | None = None,
-          hrrr_dir: np.ndarray | None = None) -> dict:
+          hrrr_dir: np.ndarray | None = None, is_day_min: np.ndarray | None = None) -> dict:
     """{t_adv, b_scale, onset, wind_class} for minutes 1..n after origin.
 
     obs: station, ts_utc, tmpf, available_at (buoy air temperature goes in tmpf).
     kmia_obs: ts_utc, drct, dwpf, available_at. meta: station -> lat, lon. kmia: lat, lon.
     Fallback order at each minute: upwind stations, HRRR 2 m T, last KMIA temperature.
+    is_day_min (minutes 1..n): with physics.upstream.sea_breeze_day_only the switch (marine T_adv and
+    b_onshore) only acts in daylight minutes; a night-time onshore turn is a land/sea-breeze artefact.
     """
     speed, direction = wind_speed_dir(u10, v10)
     speed, direction = float(speed), float(direction)
@@ -146,6 +148,8 @@ def build(origin: pd.Timestamp, n: int, obs: pd.DataFrame, kmia_obs: pd.DataFram
     b_scale = np.ones(n)
     if onset is not None:
         after = np.arange(n) >= onset
+        if is_day_min is not None and cfg["physics"]["upstream"].get("sea_breeze_day_only", False):
+            after = after & np.asarray(is_day_min, bool)
         t_adv = np.where(after & ~np.isnan(marine), marine, t_adv)
         prior = cfg["physics"]["prior"]
         b_scale[after] = prior["b_onshore"] / prior["b"]

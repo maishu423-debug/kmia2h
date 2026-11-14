@@ -133,6 +133,7 @@ physics:
     marine: {primary: [VAKF1, FWYF1], fallback: [KFLL]}
     sea_breeze_window_min: 30.0
     sea_breeze_dew_rise_f: 2.0
+    sea_breeze_day_only: true     # FROZEN pre-Phase-9: switch acts only in daylight minutes
   rain:
     search_km: 40.0
     hit_km: 5.0
@@ -159,7 +160,7 @@ filter:
     kappa: 5.0e-4
   obs_sigma:                      # degF, GOES is a fraction
     hfmetar: 0.52
-    metar: 0.3
+    metar: 0.3                    # FROZEN: 0.6 matches the 2022-2023 innovations but scores worse on 2024 (REPORT.md)
     goes: 0.15
     hrrr: 1.5
   init_sigma:
@@ -202,8 +203,21 @@ mos:
   params: {num_leaves: 31, learning_rate: 0.03, min_data_in_leaf: 20, verbosity: -1, seed: 20261109, deterministic: true, force_col_wise: true, num_threads: 6}
   max_rounds: 2000
   early_stopping_rounds: 100
-  cv_folds: 3
-  embargo_min: 120                # windows overlap for two hours
+  cv_folds: 6                     # contiguous 4-month blocks of 2022-2023
+  embargo_min: 1440               # one day: windows overlap for two hours and errors persist within a day
+  params_by_target:               # selected once by the regularise grid on backtest s6_mrms (2022-2023 CV)
+    h_r: {num_leaves: 31, min_data_in_leaf: 20}
+    l_r: {num_leaves: 15, min_data_in_leaf: 100, lambda_l2: 1.0, feature_fraction: 0.8}
+  regularise:                     # pre-Phase-9: pick params by time-blocked CV on 2022-2023 only
+    enabled: false                # done; outcome frozen in params_by_target
+    select_taus: [0.1, 0.5, 0.9]
+    grid:
+      - {num_leaves: 31, min_data_in_leaf: 20}
+      - {num_leaves: 15, min_data_in_leaf: 100, lambda_l2: 1.0, feature_fraction: 0.8}
+      - {num_leaves: 7, min_data_in_leaf: 200, lambda_l2: 5.0, feature_fraction: 0.7}
+      - {num_leaves: 15, min_data_in_leaf: 400, lambda_l2: 10.0, feature_fraction: 0.7}
+      - {num_leaves: 4, min_data_in_leaf: 300, lambda_l2: 10.0, feature_fraction: 0.7}
+      - {num_leaves: 31, min_data_in_leaf: 500, lambda_l2: 20.0, feature_fraction: 0.6}
   min_tail_scale_f: 0.05
   quantile_eps: 1.0e-6
   bin_offset: 15
@@ -216,3 +230,9 @@ conformal:
   all_group: __all__
   blend_step: 0.05
   p_floor: 1.0e-6
+
+# Frozen configuration for Phase 9 (chosen on 2024 blended log-loss, high + low; nothing tuned after test results).
+frozen:
+  backtest_tag: s9_sb03           # filter + simulation settings above, ODE prior params/ode_prior_s9_sb03.json
+  mos_name: s9_sb03               # models/mos_{high,low}_s9_sb03.pkl, params/conformal_s9_sb03.json
+  sources: [goes, hrrr, sea_breeze, mrms]

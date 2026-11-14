@@ -72,6 +72,21 @@ def model_cfg() -> dict:
             cfg["simulate"][k] = v
         for k, v in f.get("residual", {}).items():
             cfg["residual"][k] = v
+    return apply_overrides(cfg)
+
+
+def apply_overrides(cfg: dict, overrides: dict | None = None) -> dict:
+    """Dotted-key overrides ({"filter.obs_sigma.metar": 0.6}), from the argument or the JSON in the
+    KMIA2H_OVERRIDE environment variable, so an experiment can run beside another without editing files."""
+    import os
+    if overrides is None:
+        overrides = json.loads(os.environ.get("KMIA2H_OVERRIDE", "{}") or "{}")
+    for key, v in overrides.items():
+        *parts, last = key.split(".")
+        node = cfg
+        for p in parts:
+            node = node[p]
+        node[last] = v
     return cfg
 
 
@@ -209,7 +224,8 @@ def window_forcing(inp: Inputs, origin: pd.Timestamp, cfg: dict, n: int | None =
             if np.isfinite(h.get("u0", np.nan)):
                 u10, v10 = h["u0"], h["v0"]
     up = upstream.build(origin, n, inp.up, kmia_obs, inp.meta, inp.meta[CFG.station], u10, v10, cfg,
-                        st["t_last"], hrrr_t2m, hrrr_dir if inp.extra.get("sea_breeze_hrrr") else None)
+                        st["t_last"], hrrr_t2m, hrrr_dir if inp.extra.get("sea_breeze_hrrr") else None,
+                        is_day_min=sol["is_day"].fillna(False).to_numpy(bool))
     if not inp.extra.get("sea_breeze", False):
         up["b_scale"] = np.ones(n)
     else:

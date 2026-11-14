@@ -291,3 +291,23 @@ def refit_positive_lags(ac: dict) -> dict:
 
 if __name__ == "__main__" and False:
     pass
+
+
+def extend_table() -> pd.DataFrame:
+    """Phase 9: the L-primary floor table over the whole record (through periods.data_end), with the
+    regime assignment and residual pools still from 2016-2023 only. Rows up to 2024 equal the Phase 3
+    table. Written to store/floor_table_L21_full.parquet; the Phase 3 file is left alone."""
+    from kmia2h.data.qc import clean
+    k = pd.read_parquet(store("kmia_1min.parquet"))
+    t1, precip = clean(k), k["precip"]
+    f10 = pd.read_parquet(store("features_10m.parquet"))
+    d = attach(floor_table(t1, precip, CFG.floor.L_primary, CFG.sim.origin_step_floor_min), f10)
+    fit0, fit1 = CFG.periods.floor_fit
+    train = pd.Series((d.index >= pd.Timestamp(fit0, tz="UTC")) &
+                      (d.index <= pd.Timestamp(fit1, tz="UTC") + pd.Timedelta(hours=23, minutes=59)), index=d.index)
+    key = assign_regime(d, train, CFG.floor.min_regime_n)
+    d["bH"], d["bL"] = baseline_point(d)
+    d["ebH"], d["ebL"] = d.Hr - d.bH, d.Lr - d.bL
+    d["regime"] = key
+    d.to_parquet(store("floor_table_L21_full.parquet"))
+    return d
