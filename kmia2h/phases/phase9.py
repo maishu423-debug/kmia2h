@@ -267,8 +267,8 @@ def worst_windows(t: pd.DataFrame, tag: str, n: int = 50, use=()) -> pd.DataFram
     worst = w.sum(1).sort_values(ascending=False).head(n).index
     od = out(9, "worst")
     od.mkdir(parents=True, exist_ok=True)
-    cf_end = pipeline.source_features(pd.DatetimeIndex(worst) + pd.Timedelta(minutes=CFG.sim.horizon_min),
-                                      ("goes",))["cf_disc"].to_numpy()
+    ends = pd.DatetimeIndex(worst) + pd.Timedelta(minutes=CFG.sim.horizon_min)
+    cf_end = pipeline.source_features(ends.sort_values(), ("goes",))["cf_disc"].reindex(ends).to_numpy()
     rows = []
     for i, o in enumerate(worst):
         o = pd.Timestamp(o)

@@ -1,0 +1,11 @@
+{
+ "kmia_1min.parquet": true,
+ "obs.parquet": true,
+ "ndbc.parquet": true,
+ "goes_feat.parquet": false,
+ "mrms_feat.parquet": false,
+ "nwp_point.parquet": true,
+ "features_30m.parquet": true,
+ "features_10m.parquet": true,
+ "floor_table_L21 (<=2024)": false
+}

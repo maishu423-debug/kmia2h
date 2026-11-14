@@ -255,3 +255,48 @@ Three changes, each fitted on 2022-2023 and scored on 2024. They were tested in 
 The raised METAR error is correct as a description of the innovations, but it costs score. The likely reason is that the tenths-°C METAR is the only sub-degree observation, and the filter benefits from over-weighting it. That is logged in DECISIONS.md.
 
 Floor and baseline on 2024 are unchanged (0.820 / 0.452 and 0.294 / 2.043 high; 0.838 / 0.428 and 0.268 / 2.132 low). Nothing below was tuned after test results were seen.
+
+## Phase 9 — Test A (2025) and Test B (2026-01 to 2026-11-12), frozen configuration
+
+Run once, with the configuration frozen above (commit "pre-Phase-9: ... freeze best config"). No refitting:
+- MOS and spread calibration: 2022-2023.
+- Conformal offsets, blend weights and the abstain rule: 2024.
+- Floor: the Phase 3 oracle with 2016-2023 residual pools.
+
+Inputs are live streams only: no HFMETAR is synthesised from 1-minute data in the test years. Full tables are in `out/phase9/scores.md`; per-origin results are in `out/phase9/per_origin_{A,B}.parquet`.
+
+A single code fix was made after scores existed: unsorted origins in the worst-window plotting step. The rerun reproduced the score files byte for byte.
+
+| Hit / log-loss / CRPS | Test A high | Test A low | Test B high | Test B low | 2024 high | 2024 low |
+| --- | --- | --- | --- | --- | --- | --- |
+| Floor | 0.808 / 0.467 / 0.18 | 0.818 / 0.466 / 0.16 | 0.820 / 0.447 / 0.17 | 0.825 / 0.454 / 0.16 | 0.819 / 0.454 | 0.838 / 0.428 |
+| Baseline | 0.290 / 2.022 / 1.10 | 0.280 / 2.122 / 1.21 | 0.287 / 2.072 / 1.16 | 0.270 / 2.166 / 1.28 | 0.297 / 2.039 | 0.273 / 2.125 |
+| Raw ensemble | 0.363 / 1.904 / 0.93 | 0.295 / 2.067 / 0.95 | 0.350 / 2.015 / 0.99 | 0.286 / 2.216 / 1.04 | 0.354 / 1.908 | 0.293 / 2.070 |
+| **Final (blend)** | **0.438 / 1.455 / 0.61** | **0.386 / 1.582 / 0.70** | **0.421 / 1.527 / 0.65** | **0.373 / 1.663 / 0.76** | 0.419 / 1.476 | 0.369 / 1.602 |
+
+Log-loss standard errors (block bootstrap by day) are about 0.02.
+
+- **Done-when items:**
+  - The final log-loss is below the baseline's on Test A, for the high (1.455 vs 2.022) and for the low (1.582 vs 2.122).
+  - CRPS roughly halves against the baseline.
+  - Test A is as good as or slightly better than 2024, so there is no sign of overfitting to the selection year.
+  - The model closes 35% (high) and 33% (low) of the baseline-to-floor gap on Test A.
+- **Reliability:** within 0.04 in every populated decile on Test A. The model is slightly under-confident at 0.5-0.7.
+- **Raw-ensemble rank histogram:** U-shaped, as on 2024, so the raw ensemble is too narrow. The calibrated layers absorb it.
+- **Edge:** the hit rate is flat in edge on Test A (0.43-0.45 for the high). Edge sharpens the oracle, not this model, because the model's state error (~1 F) swamps the sub-degree position.
+- **Abstain rule** (`params/abstain.json`):
+  - On 2024, 85% hit with at least 1% of origins acted on was not reachable. The rule took the best achievable: high 79%, low 66%, at about 2% acted on.
+  - Test A: high hit 0.716 (95% CI 0.660-0.771) on 2.6% acted on; low 0.558 (0.499-0.618) on 2.7%.
+  - Test B: high 0.734 (0.681-0.788); low 0.578 (0.518-0.639).
+  - Both test years fall below the 2024 in-sample hit rates. That is expected, because the 2024 probabilities are in-sample for conformal and blend.
+- **Stability (Test B vs Test A):**
+  - The final model is worse on Test B by +0.072 (high) and +0.081 (low) in log-loss, flagged at 2 SE. So are MOS, the raw ensemble and partly the baseline (+0.05 high, flagged).
+  - The floor does not move. So the 2026 windows are not intrinsically harder; the forecast inputs are worse.
+  - Of 648 stratified score cells, 154 are flagged across all models.
+  - The largest final-model shifts are concentrated in daytime, offshore flow, BKN/OVC sky and the dry-season low (+0.18).
+  - Test B is a partial year that omits December, has a 2026-09 buoy gap, and has KMIA reporting outages (2026-04: 270 abstained origins).
+  - Nothing was re-tuned in response.
+- **50 worst Test A windows** (`out/phase9/worst/`, PNG plus `classification.csv`):
+  - 32 state: the analysis was more than 1.5 F off at the origin, mostly after convective rain or a bad or stale report. One is 9.8 F off, on 2025-03-17.
+  - 9 sea-breeze, 7 rain, 1 cloud, 1 coefficients.
+  - The dominant failure is filter state, not forcing. The next improvement is in assimilation: rain-aware state noise and a gross-error check on reports. This is consistent with the "state > ODE" premise of Phase 5.

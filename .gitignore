@@ -9,3 +9,4 @@ out/**/*.png
 *.egg-info/
 models/
 out/**/*.pkl
+!out/phase9/worst/*.png
