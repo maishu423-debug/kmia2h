@@ -26,8 +26,8 @@ Create an empty Railway project and add two services connected to this GitHub re
   database, the filter state and the background threads are single-instance.
 - Do not enable Serverless / app sleeping for the Backend: sleeping stops the forecast, temperature-monitor,
   price-tracker and autotrader threads.
-- Memory: a forecast cycle (fetch + filter + 4,000 simulated paths + MOS) peaks at roughly 1–1.5 GB. Give the Backend
-  at least 2 GB.
+- Memory: measured locally, the Backend worker peaked at 0.70 GB resident over startup and forecast cycles (fetch +
+  filter + 4,000 simulated paths + MOS). Give the Backend at least 1 GB.
 
 ## 2. Add persistent Backend storage
 

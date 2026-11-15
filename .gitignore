@@ -29,3 +29,4 @@ out/**/*.pkl
 /site/frontend/node_modules/
 /site/frontend/.next/
 /site/.tools/
+!out/site/screenshot.png
