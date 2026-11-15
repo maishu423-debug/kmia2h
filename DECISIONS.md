@@ -45,3 +45,11 @@
 - KMIA routine METARs from aviationweather.gov are merged into the live obs table, with IEM rows kept on duplicates. It is the same station, so this does not break the no-substitute rule.
 - Climate-day composition assumes the observed and forecast parts are independent. The elapsed-part pmf was fitted on 2022–2023 and checked on 2024. When the 2-hour window crosses LST midnight, the cut-off forecast part uses spread-calibrated physics samples, because MOS was trained only on full windows.
 - The outage tests use 2024 origins, not Test A, so their costs can be scored without touching the test years.
+
+## Live website (`site/`, BUILD_SITE.md, 2026-11-15)
+
+- **Part 1 — copy.** From `model2v2dsm` (commit e5b3039), only the files BUILD_SITE.md lists were copied into `site/backend` and `site/frontend`: the Next.js frontend, the Django skeleton, the temperature monitor and NWS / DSM code with the weather modules they need, paper trading with the Kalshi client, the Sheets logging, and the related tests. Left out: `modelscripts/`, the AccuWeather and VAR models, `meteo.py`, the CSVs, root scripts, `kalshi_api/forecast.py`, `weather/asos_shadow.py`, `tools/`.
+- `weather/asos_parser.py` and `asos_nowcast.py` needed unit conversions from the excluded `meteo.py`. A new `weather/units.py` (written here: Magnus humidity with Alduchov-Eskridge constants, wind components) replaces it.
+- `asos_shadow` (LDM-vs-public comparison) is not on the copy list, so its hook in `asos_client.fetch_recent_observations`, its field in `/weather/source` and its tests were removed. The LDM-vs-public HTML report view (`/weather/report`) and its tests were removed too, because they load `tools/ldm_vs_public_report.py`. So were the unused `debug_pem` / `debug_ws` views. None of these were routed to the UI's data.
+- The HFMETAR last-good file moved from `modelscripts/asos_last_good.json` to `site/backend/data/asos_last_good.json` (still overridable with `ASOS_STATE_PATH`; `/data/asos_last_good.json` on Railway).
+- One Python environment for the model and the site: Django 6.0.6 and the old backend's other pins are a `site` extra in `pyproject.toml`. Python is 3.12 (the old backend used 3.13.2; `kmia2h`'s scientific stack is pinned for 3.12). `requires-python` is now `>=3.12,<3.13`, since Django 6 needs 3.12.

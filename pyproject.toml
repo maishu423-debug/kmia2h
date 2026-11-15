@@ -2,7 +2,7 @@
 name = "kmia2h"
 version = "0.2.0"
 description = "KMIA 2-hour high/low probabilistic model (SPEC.md)."
-requires-python = ">=3.11,<3.13"
+requires-python = ">=3.12,<3.13"
 dependencies = [
   "numpy",
   "pandas",
@@ -28,6 +28,17 @@ dependencies = [
   "matplotlib",
   "pytest",
   "tabulate>=0.10.0",
+]
+
+[project.optional-dependencies]
+# The live website (site/backend): Django API, Kalshi paper trading, Google Sheets logging.
+site = [
+  "Django==6.0.6",
+  "cryptography==49.0.0",
+  "gunicorn",
+  "gspread==6.2.1",
+  "google-auth==2.56.0",
+  "websockets==16.0",
 ]
 
 [build-system]

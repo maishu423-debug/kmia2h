@@ -19,3 +19,13 @@ out/**/*.pkl
 !/params/*.json
 !/models/mos_high_s9_sb03.joblib
 !/models/mos_low_s9_sb03.joblib
+
+# ---- live website (site/): runtime state and build output, never committed ----
+/site/backend/data/
+/site/backend/db.sqlite3
+/site/backend/logs/
+**/.env
+**/.env.*
+/site/frontend/node_modules/
+/site/frontend/.next/
+/site/.tools/
