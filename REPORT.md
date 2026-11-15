@@ -300,3 +300,44 @@ Log-loss standard errors (block bootstrap by day) are about 0.02.
   - 32 state: the analysis was more than 1.5 F off at the origin, mostly after convective rain or a bad or stale report. One is 9.8 F off, on 2025-03-17.
   - 9 sea-breeze, 7 rain, 1 cloud, 1 coefficients.
   - The dominant failure is filter state, not forcing. The next improvement is in assimilation: rain-aware state noise and a gross-error check on reports. This is consistent with the "state > ODE" premise of Phase 5.
+
+## Phase 10 — the live run (`run.py`), outage tests, climate-day composition
+
+`run.py` runs the frozen pipeline once at an origin and fits nothing at run time. It writes `out/live/forecast.json` (or `--out`), appends to `out/live/runs.jsonl`, and prints the one-line summary, e.g. `high: 63 (0.36) | low: 63 (0.32) | regime night-other-sct | edge_high 0.42 | ABSTAIN`.
+
+| Mode | Use | Filter | Paths | Degradation |
+| --- | --- | --- | --- | --- |
+| `replay` (default for a historical origin) | reproduce a stored forecast | from the backtest month's spin-up, same seeds | 2,000 | reported only (backtest semantics) |
+| `spinup` | historical origin as a live run would see it; outage tests | 6 h spin-up | 4,000 | on |
+| `live` (`--origin now`) | real time | persisted state (saved 60 min before the previous origin, re-used if < 6 h old), else 6 h spin-up | 4,000 | on |
+
+**Done-when checks**
+- *Reproduces a stored Test A forecast exactly.* `run.py --origin 2025-03-02T18:00Z` and `2025-07-29T21:30Z`: the 2,000 unrounded max / min samples are bit-identical to `data/store/backtest/p9_s9_sb03`, and the final-model probability of the realised bin equals `out/phase9/per_origin_A.parquet` at full precision. These comparisons are equality checks only; nothing was scored or tuned. A full month (2025-02) regenerated through the refactored backtest loop is identical in every stored array, and the Jan–Feb 2025 Phase 9 scores re-derived through the refactored MOS code are identical (`out/phase10/refactor_check.json`).
+- *`--origin now` in under 90 s, writes forecast.json.* About 5 s wall time: fetch 4 s (IEM, aviationweather.gov, NDBC, GOES, MRMS and HRRR in parallel), filter + simulation 0.2–0.5 s, MOS 0.4 s.
+- *Outage tests never crash.* `scripts/run_phase10.py` runs 60 random 2024 origins × 7 outage sets = 420 runs, each source removed for the 60 min before the origin (`out/phase10/outage_tests.md`). Result: 0 crashes. Every run with the KMIA reports removed ends in ABSTAIN. All other runs gave a forecast, except the one origin that is already ABSTAIN with no outage. Paired log-loss cost against no outage (high / low): GOES +0.03 / +0.05; MRMS +0.11 / +0.00; HRRR +0.00 / +0.01; all three gridded sources +0.21 / +0.04. 2024 is the validation year; nothing was tuned on these numbers. The tests are in `tests/test_phase10_live.py` (15 tests + 1 network test).
+
+**Degradation as built** (SPEC Phase 10):
+- GOES stale (> 40 min): the last scan up to 3 h old is used, the filter carries C_eff, and the cloud perturbation is doubled.
+- MRMS stale: R = 0, and the jump rate is raised to the 90th percentile of the season × day/night regimes.
+- HRRR late: the previous cycle at a longer lead.
+- No KMIA HFMETAR or METAR in the last 20 min: ABSTAIN, with no neighbour substitute (tested).
+
+**Climate-day composition (`--window-start`).** A Kalshi day runs midnight to midnight LST (05:00Z to 05:00Z); `--window-start day` takes the LST midnight that begins the origin's day.
+- *Observed part:* the KMIA reports from the window start to the origin, using only reports available by the origin. The settled extreme of that stretch differs from the rounded report extreme by D. The pmf of D per side and elapsed bucket was fitted on 2022–2023 from real reports only (`params/elapsed_obs.json`, 28,276 cases). P(D = 0) is only 0.53–0.67, because HFMETAR reports whole °C.
+- *Forecast part:* the final model's probabilities for the 2-hour window. When that window crosses LST midnight, it is cut at midnight and the spread-calibrated physics samples are used instead, flagged in the JSON, since MOS was trained only on full windows.
+- *Combining them:* P(H ≤ k) = P(H_obs ≤ k) P(H_fc ≤ k), and the mirror image for the low. The result covers window start to origin + 2 h. It is labelled `complete` only when that reaches the end of the day; otherwise it is a partial day.
+- *2024 check (`out/phase10/compose_2024.md`, 10,492 origins):*
+
+| | composed | forecast window only | observed part only |
+| --- | --- | --- | --- |
+| high log-loss / hit | **1.331 / 0.465** | 3.185 / 0.201 | 2.402 / 0.387 |
+| low log-loss / hit | **1.103 / 0.586** | 4.136 / 0.140 | 1.324 / 0.574 |
+
+The composed distribution is best or tied in every elapsed bucket. Its weakest stretch is the high at 6–12 h elapsed (log-loss 1.84), when the day's high is being set inside the forecast window.
+
+**Live data findings (2026-11-15)**
+- IEM's KMIA feed runs 17–29 min behind real time and arrives in batches. The model assumes HFMETAR latency of 8 min. Routine METARs therefore also come from aviationweather.gov, which had the 07:53Z METAR by 07:56Z. That is still KMIA, not a substitute station.
+- Even so, the 20-minute rule ABSTAINs whenever neither feed has a fresh report. The cron example runs at :02 and :32.
+- Live forecasts see HFMETAR later than the backtest assumed, so their skill should be judged from `out/live_scores.parquet`, not from Phase 9.
+
+**Daily scoring.** `scripts/score_live.py` fetches the KMIA 1-minute data from IEM for logged live forecasts older than 30 h. It applies the settlement rule and appends log-loss and hit (2-hour window and climate day) to `out/live_scores.parquet`. Example crontab: `scripts/cron.example`.

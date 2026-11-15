@@ -1,0 +1,5 @@
+# KMIA 2-hour forecast: cron entries (crontab -e). Times are UTC on this machine.
+# A run every 30 minutes at :02 and :32 -- a few minutes after the :53 routine METAR and the HFMETAR batches.
+2,32 * * * *  cd /home/azureuser/kmia2h && .venv/bin/python run.py --origin now --window-start day >> logs/live.log 2>&1
+# Daily scoring once the NCEI 1-minute archive has landed (forecasts older than 30 h).
+15 12 * * *   cd /home/azureuser/kmia2h && .venv/bin/python scripts/score_live.py >> logs/score_live.log 2>&1

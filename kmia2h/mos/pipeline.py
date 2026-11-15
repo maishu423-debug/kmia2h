@@ -55,22 +55,30 @@ def calib_spread(samples, base, realised, groups, target, grid=np.round(np.arang
     return out_
 
 
-def source_features(origins: pd.DatetimeIndex, use) -> pd.DataFrame:
+def _table(name: str, tables: dict | None, columns=None) -> pd.DataFrame | None:
+    key = name.replace(".parquet", "")
+    if tables and key in tables:
+        d = tables[key]
+        return None if d is None else (d[columns].copy() if columns else d.copy())
+    return pd.read_parquet(store(name), columns=columns) if store(name).exists() else None
+
+
+def source_features(origins: pd.DatetimeIndex, use, tables: dict | None = None) -> pd.DataFrame:
     """GOES station cloud fraction, max upstream reflectivity within 40 km, HRRR 2 m T at window end,
     and avail_* flags (False where the source is missing or stale at the origin)."""
     from kmia2h.sources import MAX_GOES_AGE, MAX_MRMS_AGE
     o = pd.DataFrame({"origin": origins.astype("datetime64[ns, UTC]")})
     out = pd.DataFrame(index=origins, data={"cf_disc": np.nan, "max_dbz_up": np.nan, "hrrr_t2m_end": np.nan,
                                             "avail_goes": 0.0, "avail_mrms": 0.0, "avail_hrrr": 0.0})
-    if "goes" in use and store("goes_feat.parquet").exists():
-        g = pd.read_parquet(store("goes_feat.parquet"), columns=["ts_utc", "available_at", "cf_disc"])
+    g = _table("goes_feat.parquet", tables, ["ts_utc", "available_at", "cf_disc"]) if "goes" in use else None
+    if g is not None and len(g):
         g = g[g.cf_disc.notna()].astype({"available_at": "datetime64[ns, UTC]", "ts_utc": "datetime64[ns, UTC]"})
         m = pd.merge_asof(o, g.sort_values("available_at"), left_on="origin", right_on="available_at")
         fresh = (m.origin - m.ts_utc) <= MAX_GOES_AGE
         out["cf_disc"] = m.cf_disc.where(fresh).to_numpy()
         out["avail_goes"] = fresh.astype(float).to_numpy()
-    if "mrms" in use and store("mrms_feat.parquet").exists():
-        mr = pd.read_parquet(store("mrms_feat.parquet"))
+    mr = _table("mrms_feat.parquet", tables) if "mrms" in use else None
+    if mr is not None and len(mr):
         cols = [c for c in mr.columns if c.startswith("maxdbz_s") and int(c[-1]) <= 2]
         mr["max_up"] = mr[cols].max(axis=1)
         mr = mr[["ts_utc", "available_at", "max_up"]].astype({"available_at": "datetime64[ns, UTC]", "ts_utc": "datetime64[ns, UTC]"})
@@ -78,8 +86,8 @@ def source_features(origins: pd.DatetimeIndex, use) -> pd.DataFrame:
         fresh = (m.origin - m.ts_utc) <= MAX_MRMS_AGE
         out["max_dbz_up"] = m.max_up.where(fresh).to_numpy()
         out["avail_mrms"] = fresh.astype(float).to_numpy()
-    if "hrrr" in use and store("nwp_point.parquet").exists():
-        h = pd.read_parquet(store("nwp_point.parquet"), columns=["cycle_utc", "valid_utc", "t2m"])
+    h = _table("nwp_point.parquet", tables, ["cycle_utc", "valid_utc", "t2m"]) if "hrrr" in use else None
+    if h is not None and len(h):
         h = h[h.t2m.notna()].astype({"cycle_utc": "datetime64[ns, UTC]", "valid_utc": "datetime64[ns, UTC]"})
         h["available_at"] = h.cycle_utc + pd.Timedelta(minutes=CFG.latency_min.hrrr)
         h["cyc_naive"] = h.cycle_utc.dt.tz_convert(None).astype("datetime64[ns]")
@@ -99,20 +107,23 @@ def source_features(origins: pd.DatetimeIndex, use) -> pd.DataFrame:
     return out
 
 
-def assemble(tag: str, first: str, last: str, use=None) -> pd.DataFrame:
-    b = backtest.load(tag, first, last)
-    w = windows.load("v1", first, last)
-    wt = pd.DataFrame({"h_r": w["y_h_r"], "l_r": w["y_l_r"], "hi": w["y_hi"], "lo": w["y_lo"]}, index=w["origins"])
-    f30 = pd.read_parquet(store("features_30m.parquet"))
+F30_COLS = ["t_last", "t_age_min", "trend_30", "hour_sin", "hour_cos", "doy_sin", "doy_cos", "season", "is_day",
+            "sky_class", "wind", "sector", "dd_bucket", "avail_neighbours", "avail_ndbc", "hour_lst", "rain_recent"]
+
+
+def frame_from(b: dict, feats: pd.DataFrame, use=(), wt: pd.DataFrame | None = None,
+               tables: dict | None = None) -> pd.DataFrame:
+    """MOS input frame: backtest fields b (origin, edge_*, spread, ...), origin features (F30_COLS,
+    indexed by origin), optional window truth wt and source features."""
     d = pd.DataFrame({"origin": b["origin"]}).set_index("origin", drop=False)
-    d = d.join(wt).join(f30[["t_last", "t_age_min", "trend_30", "hour_sin", "hour_cos", "doy_sin", "doy_cos", "season",
-                             "is_day", "sky_class", "wind", "sector", "dd_bucket", "avail_neighbours", "avail_ndbc",
-                             "hour_lst", "rain_recent"]])
+    if wt is not None:
+        d = d.join(wt)
+    d = d.join(feats[F30_COLS])
     for k in ("edge_high", "edge_low", "spread", "t_adv_mean", "c_mean", "mean_max", "mean_min", "ens_T_sd"):
         d[k] = b[k]
     d["ens_spread"] = d.spread
     d["t_adv_anom"] = d.t_adv_mean - d.t_last
-    sf = source_features(pd.DatetimeIndex(d.index), use or ())
+    sf = source_features(pd.DatetimeIndex(d.index), use or (), tables)
     for c in ("cf_disc", "max_dbz_up", "hrrr_t2m_end", "avail_goes", "avail_mrms", "avail_hrrr"):
         d[c] = sf[c].to_numpy()
     for c, vals in (("season", ["wet", "dry"]), ("sky_class", ["clear", "sct", "bkn", "ovc"]),
@@ -122,8 +133,15 @@ def assemble(tag: str, first: str, last: str, use=None) -> pd.DataFrame:
     d["regime_is_day"] = d.is_day.astype(float)
     d["avail_neighbours"] = d.avail_neighbours.astype(float)
     d["avail_ndbc"] = d.avail_ndbc.astype(float)
-    d = d.reset_index(drop=True)
-    return d, b
+    return d.reset_index(drop=True)
+
+
+def assemble(tag: str, first: str, last: str, use=None) -> pd.DataFrame:
+    b = backtest.load(tag, first, last)
+    w = windows.load("v1", first, last)
+    wt = pd.DataFrame({"h_r": w["y_h_r"], "l_r": w["y_l_r"], "hi": w["y_hi"], "lo": w["y_lo"]}, index=w["origins"])
+    f30 = pd.read_parquet(store("features_30m.parquet"))
+    return frame_from(b, f30, use, wt), b
 
 
 def floor_baseline(d: pd.DataFrame) -> dict:
@@ -244,23 +262,21 @@ def main(tag: str = "v2", reuse: bool = False, use=(), name: str | None = None):
     return sc, st, report, d, res
 
 
-def apply_frozen(tag: str, first: str, last: str, name: str, use=()) -> tuple[pd.DataFrame, dict]:
-    """Frozen Phase 8 on any period: spread calibration (2022-2023), MOS (2022-2023), conformal and blend
-    weights (2024) are loaded from models/mos_<side>_<name>.pkl and params/conformal_<name>.json.
-    Nothing is fitted. Returns the assembled frame and per-side probabilities on bins base-OFF..base+OFF."""
+def frozen_probs(d: pd.DataFrame, samples: dict, name: str) -> dict:
+    """Frozen Phase 8 on an assembled frame d and per-side unrounded extreme samples
+    ({"high": (n, paths), "low": ...}): spread calibration (2022-2023), MOS (2022-2023), conformal and
+    blend weights (2024), loaded from models/mos_<side>_<name>.pkl and params/conformal_<name>.json.
+    Nothing is fitted. Probabilities are on bins base-OFF..base+OFF; d gains the q_* physics features."""
     cfg = model_cfg()
     frozen = json.loads(path("params", f"conformal_{name}.json").read_text())
-    d, b = assemble(tag, first, last, use)
-    ok = d.h_r.notna() & d.l_r.notna()
-    keep = ok.to_numpy()
-    d = d[ok].reset_index(drop=True)
     groups = group_of(d.season, d.is_day)
     res = {}
-    for side, S, real, tcol, qp in (("high", b["max_u"][keep], "hi", "h_r", "q_max"),
-                                    ("low", b["min_u"][keep], "lo", "l_r", "q_min")):
+    for side, real, tcol, qp in (("high", "hi", "h_r", "q_max"), ("low", "lo", "l_r", "q_min")):
+        S = samples[side]
         fz = frozen[side]
         base = np.floor(np.median(S, axis=1)).astype(int)
-        realised = (d[real].to_numpy() - (base - OFF)).astype(int)
+        realised = ((d[real].to_numpy() - (base - OFF)).astype(int) if real in d
+                    else np.full(len(d), -1))
         sc = fz["spread_scale"]
         scale = np.array([sc.get(str(g), {"scale": 1.0})["scale"] for g in groups])
         shift = np.array([sc.get(str(g), {"shift": 0.0})["shift"] for g in groups])
@@ -283,5 +299,17 @@ def apply_frozen(tag: str, first: str, last: str, name: str, use=()) -> tuple[pd
         wv = np.array([conformal.blend_weight(fz["blend_weights"], g, cfg) for g in groups])
         p_blend = wv[:, None] * p_mos + (1 - wv[:, None]) * p_phys
         res[side] = {"raw": p_raw, "physics": p_phys, "mos": p_mos, "blend": p_blend, "realised": realised,
-                     "base": base, "samples": S, "samples_cal": Sc, "y": d[tcol].to_numpy()}
+                     "base": base, "samples": S, "samples_cal": Sc, "scale": scale, "shift": shift,
+                     "y": d[tcol].to_numpy() if tcol in d else np.full(len(d), np.nan),
+                     "q_cal": q_cal, "blend_w": wv}
+    return res
+
+
+def apply_frozen(tag: str, first: str, last: str, name: str, use=()) -> tuple[pd.DataFrame, dict]:
+    """Frozen Phase 8 on a stored backtest period (see frozen_probs). Nothing is fitted."""
+    d, b = assemble(tag, first, last, use)
+    ok = d.h_r.notna() & d.l_r.notna()
+    keep = ok.to_numpy()
+    d = d[ok].reset_index(drop=True)
+    res = frozen_probs(d, {"high": b["max_u"][keep], "low": b["min_u"][keep]}, name)
     return d, res

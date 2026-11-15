@@ -1,0 +1,18 @@
+{
+ "backtest origin": true,
+ "backtest max_u": true,
+ "backtest min_u": true,
+ "backtest high": true,
+ "backtest low": true,
+ "backtest edge_high": true,
+ "backtest edge_low": true,
+ "backtest coef": true,
+ "backtest sample_paths": true,
+ "backtest rec_T": true,
+ "backtest inn_val": true,
+ "phase9 rows": [
+  4246,
+  4246
+ ],
+ "phase9 scores identical": true
+}

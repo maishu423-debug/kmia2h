@@ -53,14 +53,7 @@ def regime_arrays(table: dict, ff: pd.DataFrame) -> dict:
 FORCING_SAVE = ("s_clr", "c", "t_adv", "r", "b_scale", "kappa_scale")
 
 
-def run_month(args) -> str:
-    tag, year, month, opts = args
-    out = store(f"backtest/{tag}")
-    out.mkdir(parents=True, exist_ok=True)
-    fo = out / f"{year}{month:02d}.npz"
-    if fo.exists() and not opts.get("overwrite"):
-        return str(fo)
-    t_start = time.time()
+def setup_cfg(opts: dict) -> dict:
     cfg = model_cfg()
     for k, v in opts.get("cfg_override", {}).items():
         sect, key = k.split(".", 1)
@@ -69,12 +62,82 @@ def run_month(args) -> str:
             cfg[sect][a][b] = v
         else:
             cfg[sect][key] = v
-    start = pd.Timestamp(year=year, month=month, day=1, tz="UTC")
-    end = start + pd.offsets.MonthBegin(1)
-    spin = start - pd.Timedelta(hours=cfg["filter"]["spinup_hours"])
+    return cfg
+
+
+def simulate_origin(kf, inp: Inputs, o: pd.Timestamp, cfg: dict, table: dict, n_paths: int, rp_hook=None) -> dict:
+    """One origin from the filter's current ensemble: ABSTAIN check, window forcing, regime, simulation.
+    Raises ValueError("no recent KMIA observation (ABSTAIN)") when the newest KMIA report is > 20 min old."""
+    st = inp.state_at(o)
+    if not np.isfinite(st["t_last"]) or (o - st["t_ts"]).total_seconds() / 60 > 20:
+        raise ValueError("no recent KMIA observation (ABSTAIN)")
+    w = window_forcing(inp, o, cfg, st=st)
+    r = regime_of(inp, o, st)
+    rp = rtable.sim_params(table, r["season"], r["is_day"], r["sky_class"], r["wind"], cfg)
+    if rp_hook is not None:
+        rp = rp_hook(rp, r)
+    snap = kf.snapshot()
+    sim = simulate.run(snap, w["forcing"], rp, target_ops, cfg, o, seed=int(cfg["sim"]["seed"]) + kf.k,
+                       n_paths=n_paths, regime=f"{r['season']}|{r['is_day']}|{r['sky_class']}|{r['wind']}",
+                       latest_obs=st["t_last"], cloud=w["cloud"], rain_cells=w["rain_cells"])
+    return {"st": st, "w": w, "r": r, "rp": rp, "snap": snap, "sim": sim}
+
+
+def record(res: dict, one: dict, y: np.ndarray, floor_gap: dict, save_paths: bool) -> None:
+    """Append one simulated origin to the result lists (the stored backtest fields)."""
+    lead = CFG.sim.lead_min
+    sim, w, r, snap = one["sim"], one["w"], one["r"], one["snap"]
+    gk = f"{r['season']}|{r['is_day']}"
+    gh, gl = floor_gap.get(gk, (0.0, 0.0))
+    fc = sim.forecast
+    mean_roll = target_ops.rolling_mean(np.r_[np.full(lead, fc["mean_path"][0]), fc["mean_path"]])[lead:]
+    res["origin"].append(int(pd.Timestamp(one["origin"]).as_unit("ns").value))
+    res["max_u"].append(sim.max_unrounded.astype(np.float32))
+    res["min_u"].append(sim.min_unrounded.astype(np.float32))
+    res["high"].append(sim.high.astype(np.int16))
+    res["low"].append(sim.low.astype(np.int16))
+    res["mean_max"].append(float(np.max(mean_roll)))
+    res["mean_min"].append(float(np.min(mean_roll)))
+    res["edge_high"].append(float(target_ops.edge(np.max(mean_roll) + gh)))
+    res["edge_low"].append(float(target_ops.edge(np.min(mean_roll) + gl)))
+    res["spread"].append(float(sim.checks["spread_of_path_max"]))
+    res["steps_ok"].append(bool(sim.checks["steps_within_limit"]))
+    res["near_obs"].append(bool(sim.checks["first_minute_near_obs"]))
+    res["ens_T_sd"].append(float(snap["ensemble"][:, 0].std()))
+    res["ens_Y_mean"].append(float(y.mean()))
+    res["t_adv_mean"].append(float(np.mean(w["forcing"]["t_adv"])))
+    res["c_mean"].append(float(np.mean(w["forcing"]["c"])))
+    res["mean_path"].append(np.asarray(fc["mean_path"], np.float32))
+    res["regime"].append(fc["regime"])
+    res["sector"].append(r["sector"])
+    res["wind_class"].append(w["wind_class"])
+    res["cloud_source"].append(w["cloud_source"])
+    res["coef"].append(snap["ensemble"][:, 6:10].mean(0).astype(np.float32))
+    res["ensemble"].append(snap["ensemble"].astype(np.float32))
+    if save_paths:  # Phase 9 attribution: 50 sample paths and the forcing terms
+        res["sample_paths"].append(np.asarray(sim.paths[:50], np.int16))
+        res["forcing"].append(np.stack([np.asarray(w["forcing"][c], np.float32) for c in FORCING_SAVE]))
+        rc = w.get("rain_cells")
+        res["n_rain_cells"].append(0 if rc is None else int(len(rc)))
+
+
+def run_span(spin: pd.Timestamp, end: pd.Timestamp, origins, opts: dict, seed_key: tuple[int, int],
+             tables: dict | None = None, x0: np.ndarray | None = None, cfg: dict | None = None,
+             stop_at_last: bool = False, keep: bool = False) -> dict:
+    """The continuous filter from `spin` (minute index 0) to `end`, simulating at `origins`.
+
+    seed_key (year, month) seeds the initial ensemble and the filter exactly as the monthly backtest
+    does, so a span with the backtest's spin, end and seed_key reproduces its forecasts bit for bit.
+    tables: in-memory source tables (obs, ndbc, goes_feat, mrms_feat, nwp_point) that replace the
+    stores (live runs, outage tests). x0: start from a persisted ensemble instead of spinning up.
+    stop_at_last: stop the filter at the last origin. keep: also return the per-origin objects."""
+    cfg = cfg or setup_cfg(opts)
+    year, month = seed_key
     from kmia2h import sources
-    extra = sources.factory(set(opts.get("sources", ())))(spin, end)
-    inp = Inputs.load(spin, end, extra=extra)
+    tables = tables or {}
+    extra = sources.factory(set(opts.get("sources", ())), tables=tables,
+                            goes_max_age=opts.get("goes_max_age"))(spin, end)
+    inp = Inputs.load(spin, end, obs=tables.get("obs"), ndbc=tables.get("ndbc"), extra=extra)
     minutes = pd.date_range(spin, end, freq="min", tz="UTC", inclusive="left")
     ff = filter_forcing(inp, minutes, cfg)
     ok_forcing = ff[list(NUM)].notna().all(axis=1).to_numpy()
@@ -85,82 +148,71 @@ def run_month(args) -> str:
     step_fn = process_model.make_step({c: ff[c].to_numpy(float) for c in NUM}, reg, cfg)
     rng = np.random.default_rng([cfg["sim"]["seed"], year, month])
     N = int(cfg["enkf"]["members"])
-    t0 = float(ff.t_last.dropna().iloc[0]) if ff.t_last.notna().any() else 75.0
-    c0 = float(np.nan_to_num(ff.c.iloc[0], nan=0.3))
-    x0 = process_model.init_ensemble(N, t0, c0, cfg, rng)
+    if x0 is None:
+        t0 = float(ff.t_last.dropna().iloc[0]) if ff.t_last.notna().any() else 75.0
+        c0 = float(np.nan_to_num(ff.c.iloc[0], nan=0.3))
+        x0 = process_model.init_ensemble(N, t0, c0, cfg, rng)
     kf = enkf.EnKF(x0, step_fn, cfg, seed=int(cfg["sim"]["seed"]) + year * 100 + month)
     obs = observations(inp, spin, extra.get("filter_obs"))
     by_avail = defaultdict(list)
     for o in obs:
         if o.available_k >= 0:
             by_avail[max(o.available_k, 0)].append(o)
-    step = int(opts.get("step_min", CFG.sim.origin_step_backtest_min))
-    origins = pd.date_range(start, end, freq=f"{step}min", inclusive="left")
     ok_of = {int((o - spin).total_seconds() // 60): o for o in origins}
     n_paths = int(opts.get("n_paths", CFG.sim.paths_backtest))
-    lead = CFG.sim.lead_min
-    # per-minute filtered record (for the residual refit and diagnostics)
     rec_T, rec_Y, rec_sd = np.full(len(minutes), np.nan), np.full(len(minutes), np.nan), np.full(len(minutes), np.nan)
     res = defaultdict(list)
     floor_gap = opts.get("median_gap") or {}
     if 0 in by_avail:
         kf.assimilate(by_avail[0])
     k_end = len(minutes) - 1
+    if stop_at_last and ok_of:
+        k_end = min(k_end, max(ok_of))
+    state_k, state_x = opts.get("state_k"), None
+    if state_k == 0:
+        state_x = kf.state.copy()
     while kf.k < k_end:
         kf.advance()
         if kf.k in by_avail:
             kf.assimilate(by_avail[kf.k])
         x = kf.state
+        if kf.k == state_k:
+            state_x = x.copy()
         y = process_model.sensor_temperature(x)
         rec_T[kf.k], rec_Y[kf.k], rec_sd[kf.k] = x[:, 0].mean(), y.mean(), y.std()
         if kf.k in ok_of and opts.get("simulate", True):
             o = ok_of[kf.k]
             try:
-                st = inp.state_at(o)
-                if not np.isfinite(st["t_last"]) or (o - st["t_ts"]).total_seconds() / 60 > 20:
-                    raise ValueError("no recent KMIA observation (ABSTAIN)")
-                w = window_forcing(inp, o, cfg, st=st)
-                r = regime_of(inp, o, st)
-                rp = rtable.sim_params(table, r["season"], r["is_day"], r["sky_class"], r["wind"], cfg)
-                snap = kf.snapshot()
-                sim = simulate.run(snap, w["forcing"], rp, target_ops, cfg, o, seed=int(cfg["sim"]["seed"]) + kf.k,
-                                   n_paths=n_paths, regime=f"{r['season']}|{r['is_day']}|{r['sky_class']}|{r['wind']}",
-                                   latest_obs=st["t_last"], cloud=w["cloud"], rain_cells=w["rain_cells"])
+                one = simulate_origin(kf, inp, o, cfg, table, n_paths, opts.get("rp_hook"))
             except Exception as e:
                 res["fail"].append((str(o), repr(e)[:120]))
                 continue
-            gk = f"{r['season']}|{r['is_day']}"
-            gh, gl = floor_gap.get(gk, (0.0, 0.0))
-            fc = sim.forecast
-            mean_roll = target_ops.rolling_mean(np.r_[np.full(lead, fc["mean_path"][0]), fc["mean_path"]])[lead:]
-            res["origin"].append(int(pd.Timestamp(o).as_unit("ns").value))
-            res["max_u"].append(sim.max_unrounded.astype(np.float32))
-            res["min_u"].append(sim.min_unrounded.astype(np.float32))
-            res["high"].append(sim.high.astype(np.int16))
-            res["low"].append(sim.low.astype(np.int16))
-            res["mean_max"].append(float(np.max(mean_roll)))
-            res["mean_min"].append(float(np.min(mean_roll)))
-            res["edge_high"].append(float(target_ops.edge(np.max(mean_roll) + gh)))
-            res["edge_low"].append(float(target_ops.edge(np.min(mean_roll) + gl)))
-            res["spread"].append(float(sim.checks["spread_of_path_max"]))
-            res["steps_ok"].append(bool(sim.checks["steps_within_limit"]))
-            res["near_obs"].append(bool(sim.checks["first_minute_near_obs"]))
-            res["ens_T_sd"].append(float(snap["ensemble"][:, 0].std()))
-            res["ens_Y_mean"].append(float(y.mean()))
-            res["t_adv_mean"].append(float(np.mean(w["forcing"]["t_adv"])))
-            res["c_mean"].append(float(np.mean(w["forcing"]["c"])))
-            res["mean_path"].append(np.asarray(fc["mean_path"], np.float32))
-            res["regime"].append(fc["regime"])
-            res["sector"].append(r["sector"])
-            res["wind_class"].append(w["wind_class"])
-            res["cloud_source"].append(w["cloud_source"])
-            res["coef"].append(snap["ensemble"][:, 6:10].mean(0).astype(np.float32))
-            res["ensemble"].append(snap["ensemble"].astype(np.float32))
-            if opts.get("save_paths"):  # Phase 9 attribution: 50 sample paths and the forcing terms
-                res["sample_paths"].append(np.asarray(sim.paths[:50], np.int16))
-                res["forcing"].append(np.stack([np.asarray(w["forcing"][c], np.float32) for c in FORCING_SAVE]))
-                rc = w.get("rain_cells")
-                res["n_rain_cells"].append(0 if rc is None else int(len(rc)))
+            one["origin"] = o
+            record(res, one, y, floor_gap, bool(opts.get("save_paths")))
+            if keep:
+                res["kept"].append(one)
+    return {"res": res, "kf": kf, "inp": inp, "minutes": minutes, "rec": (rec_T, rec_Y, rec_sd),
+            "ok_forcing": ok_forcing, "cfg": cfg, "table": table, "state_x": state_x}
+
+
+def run_month(args) -> str:
+    tag, year, month, opts = args
+    out = store(f"backtest/{tag}")
+    out.mkdir(parents=True, exist_ok=True)
+    fo = out / f"{year}{month:02d}.npz"
+    if fo.exists() and not opts.get("overwrite"):
+        return str(fo)
+    t_start = time.time()
+    cfg = setup_cfg(opts)
+    start = pd.Timestamp(year=year, month=month, day=1, tz="UTC")
+    end = start + pd.offsets.MonthBegin(1)
+    spin = start - pd.Timedelta(hours=cfg["filter"]["spinup_hours"])
+    step = int(opts.get("step_min", CFG.sim.origin_step_backtest_min))
+    origins = pd.date_range(start, end, freq=f"{step}min", inclusive="left")
+    span = run_span(spin, end, origins, opts, (year, month), cfg=cfg)
+    res, kf, minutes = span["res"], span["kf"], span["minutes"]
+    rec_T, rec_Y, rec_sd = span["rec"]
+    ok_forcing = span["ok_forcing"]
     inn = kf.innovations()
     np.savez_compressed(
         fo, origin=np.array(res["origin"], np.int64), max_u=np.array(res["max_u"]), min_u=np.array(res["min_u"]),

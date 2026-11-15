@@ -79,6 +79,38 @@ def file_time(k: str) -> pd.Timestamp:
     return pd.to_datetime(k.split("_")[-1][:15], format="%Y%m%d-%H%M%S", utc=True)
 
 
+def origin_row(o: pd.Timestamp, ft: pd.Series, fs) -> dict | None:
+    """MRMS features for one origin from the file listing ft (time -> key): the newest file available
+    at o, and motion from the file 9-16 min earlier."""
+    lat = CFG.latency_min.mrms
+    want = o - pd.Timedelta(minutes=max(lat, 10))
+    c = ft[(ft.index <= want) & (ft.index > want - pd.Timedelta(minutes=10))]
+    if c.empty:
+        return None
+    ts, k = c.index[-1], c.iloc[-1]
+    p = ft[(ft.index <= ts - pd.Timedelta(minutes=9)) & (ft.index > ts - pd.Timedelta(minutes=16))]
+    try:
+        v, g = decode(fs.cat(k))
+        row = {"origin": o, "ts_utc": ts, **features(v, g)}
+        if not p.empty:
+            v0, _ = decode(fs.cat(p.iloc[-1]))
+            u, vv, q = motion(np.nan_to_num(v0) >= 20, np.nan_to_num(v) >= 20, g["dx_m"], (ts - p.index[-1]).total_seconds())
+            row.update({"motion_u": u, "motion_v": vv, "motion_q": q})
+        return row
+    except Exception as e:
+        return {"origin": o, "ts_utc": ts, "error": repr(e)[:100]}
+
+
+def listing(days, fs) -> pd.Series:
+    keys = []
+    for d in days:
+        try:
+            keys += fs.ls(f"noaa-mrms-pds/CONUS/{PROD}/{d:%Y%m%d}/")
+        except FileNotFoundError:
+            pass
+    return pd.Series(keys, index=pd.DatetimeIndex([file_time(k) for k in keys])).sort_index()
+
+
 def day_job(day: pd.Timestamp) -> str:
     store("mrms_days").mkdir(parents=True, exist_ok=True)
     out = store("mrms_days") / f"{day:%Y%m%d}.parquet"
@@ -96,27 +128,10 @@ def day_job(day: pd.Timestamp) -> str:
         pd.DataFrame({"origin": []}).to_parquet(out.with_suffix(".empty.parquet"))
         return f"mrms {day.date()} EMPTY"
     ft = pd.Series(keys, index=pd.DatetimeIndex([file_time(k) for k in keys])).sort_index()
-    rows = []
-    lat = CFG.latency_min.mrms
-    for o in pd.date_range(day, day + pd.Timedelta(days=1), freq="30min", inclusive="left"):
-        want = o - pd.Timedelta(minutes=max(lat, 10))
-        c = ft[(ft.index <= want) & (ft.index > want - pd.Timedelta(minutes=10))]
-        if c.empty:
-            continue
-        ts, k = c.index[-1], c.iloc[-1]
-        p = ft[(ft.index <= ts - pd.Timedelta(minutes=9)) & (ft.index > ts - pd.Timedelta(minutes=16))]
-        try:
-            v, g = decode(fs.cat(k))
-            row = {"origin": o, "ts_utc": ts, **features(v, g)}
-            if not p.empty:
-                v0, _ = decode(fs.cat(p.iloc[-1]))
-                u, vv, q = motion(np.nan_to_num(v0) >= 20, np.nan_to_num(v) >= 20, g["dx_m"], (ts - p.index[-1]).total_seconds())
-                row.update({"motion_u": u, "motion_v": vv, "motion_q": q})
-            rows.append(row)
-        except Exception as e:
-            rows.append({"origin": o, "ts_utc": ts, "error": repr(e)[:100]})
+    rows = [r for o in pd.date_range(day, day + pd.Timedelta(days=1), freq="30min", inclusive="left")
+            if (r := origin_row(o, ft, fs)) is not None]
     d = pd.DataFrame(rows)
-    d["available_at"] = d.ts_utc + pd.Timedelta(minutes=lat)
+    d["available_at"] = d.ts_utc + pd.Timedelta(minutes=CFG.latency_min.mrms)
     d.to_parquet(out)
     return f"mrms {day.date()} {len(d)} {time.time() - t0:.0f}s"
 

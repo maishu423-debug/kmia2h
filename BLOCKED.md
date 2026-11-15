@@ -12,3 +12,7 @@
 - Abstain rule: 85% hit among acted-on origins is not achievable on 2024 at >= 1% acted on. The best achievable is high 79% and low 66%. The rule uses that, and it is evaluated unchanged on Test A and B (REPORT.md).
 - The Test B vs Test A stability check flags the global final-model log-loss (+0.07 high, +0.08 low) and 154 of 648 stratified cells. The floor is stable, so the input streams are the suspect (2026 KMIA outages, no VAKF1 September 2026). Logged, not tuned.
 - NDBC September 2026 is not yet archived (monthly file 404, before the realtime window), so avail_ndbc is False for 2026-09-01..29.
+
+## Phase 10 (2026-11-15)
+
+- The live KMIA HFMETAR latency through IEM is 17–29 min, against the 8 min assumed in training. Live runs will ABSTAIN more often than the backtest did under the 20-minute rule, and they see the station later. Logged. The aviationweather.gov METAR feed narrows the gap only around :53.

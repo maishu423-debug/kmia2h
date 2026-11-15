@@ -10,3 +10,5 @@ out/**/*.png
 models/
 out/**/*.pkl
 !out/phase9/worst/*.png
+/out/live/
+/out/live_scores.parquet

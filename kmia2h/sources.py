@@ -14,11 +14,18 @@ MAX_MRMS_AGE = pd.Timedelta(minutes=30)
 MAX_MOTION_MS = 30.0
 
 
-def _load(name: str, lo, hi, tcol="available_at"):
-    p = store(name)
-    if not p.exists():
-        return None
-    d = pd.read_parquet(p)
+def _load(name: str, lo, hi, tcol="available_at", tables: dict | None = None):
+    key = name.replace(".parquet", "")
+    if tables and key in tables:
+        d = tables[key]
+        if d is None:
+            return None
+        d = d.copy()
+    else:
+        p = store(name)
+        if not p.exists():
+            return None
+        d = pd.read_parquet(p)
     for c in d.columns:
         if isinstance(d[c].dtype, pd.DatetimeTZDtype):
             d[c] = d[c].astype("datetime64[ns, UTC]")
@@ -37,20 +44,23 @@ def _latest(d: pd.DataFrame, t: pd.Timestamp, max_age: pd.Timedelta):
     return row
 
 
-def factory(use: set[str]):
-    """use: subset of {'goes', 'hrrr', 'sea_breeze', 'mrms'}. Returns f(start, end) -> extra."""
+def factory(use: set[str], tables: dict | None = None, goes_max_age: pd.Timedelta | None = None):
+    """use: subset of {'goes', 'hrrr', 'sea_breeze', 'mrms'}. Returns f(start, end) -> extra.
+    tables: in-memory replacements for the stores (keys goes_feat, mrms_feat, nwp_point).
+    goes_max_age: degraded mode (GOES outage): accept an older last scan at the origin."""
+    g_age = MAX_GOES_AGE if goes_max_age is None else goes_max_age
 
     def make(start, end) -> dict:
         extra = {"sea_breeze": "sea_breeze" in use, "sea_breeze_hrrr": "sea_breeze" in use and "hrrr" in use}
         obs = []
         if "goes" in use:
-            g = _load("goes_feat.parquet", start, end)
+            g = _load("goes_feat.parquet", start, end, tables=tables)
             if g is not None and len(g):
                 g = g[g.cf_disc.notna()].reset_index(drop=True)
                 gi = g.set_index("available_at")
 
                 def goes_row(t, g=g):
-                    r = _latest(g, t, MAX_GOES_AGE)
+                    r = _latest(g, t, g_age)
                     if r is None:
                         return None
                     r = r.to_dict()
@@ -69,7 +79,7 @@ def factory(use: set[str]):
                 obs.append(pd.DataFrame({"ts_utc": g.ts_utc, "available_at": g.available_at, "kind": "goes",
                                          "value": g.cf_disc}))
         if "hrrr" in use:
-            h = _load("nwp_point.parquet", start, end + pd.Timedelta(hours=6), "valid_utc")
+            h = _load("nwp_point.parquet", start, end + pd.Timedelta(hours=6), "valid_utc", tables=tables)
             if h is not None and len(h):
                 cycles = h.groupby("cycle_utc")
 
@@ -119,7 +129,7 @@ def factory(use: set[str]):
                 obs.append(pd.DataFrame({"ts_utc": x.valid_utc, "available_at": x.cycle_utc + pd.Timedelta(minutes=CFG.latency_min.hrrr),
                                          "kind": "hrrr", "value": x.t2m}))
         if "mrms" in use:
-            m = _load("mrms_feat.parquet", start, end)
+            m = _load("mrms_feat.parquet", start, end, tables=tables)
             if m is not None and len(m):
                 def mrms_row(t, m=m):
                     r = _latest(m, t, MAX_MRMS_AGE)

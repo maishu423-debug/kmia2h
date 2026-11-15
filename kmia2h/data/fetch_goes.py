@@ -145,49 +145,58 @@ def scan_keys(prod: str, t: pd.Timestamp) -> list[tuple[pd.Timestamp, str]]:
     return sorted(out)
 
 
-def day_rows(day: pd.Timestamp, geos_cache: dict) -> pd.DataFrame:
+def origin_row(o: pd.Timestamp, is_day: bool, listing: dict, geos_cache: dict) -> dict | None:
+    """GOES features for one origin: the newest ACMC scan available at o (latency), cloud motion from
+    the scan >= 9 min earlier, cloud-top height and (daytime) optical depth from the matching scans."""
     lat = CFG.latency_min.goes
-    origins = pd.date_range(day, day + pd.Timedelta(days=1), freq="30min", inclusive="left")
-    listing = {}
-    rows = []
+    want = o - pd.Timedelta(minutes=lat)
+    cands = []
+    for hh in (want.floor("h") - pd.Timedelta(hours=1), want.floor("h")):
+        if hh not in listing:
+            listing[hh] = {p: scan_keys(p, hh) for p in ("ACMC", "ACHAC", "CODC")}
+        cands += listing[hh]["ACMC"]
+    cands = [(ts, k) for ts, k in cands if ts <= want]
+    if not cands:
+        return None
+    ts_now, k_now = cands[-1]
+    prev = [(ts, k) for ts, k in cands if ts <= ts_now - pd.Timedelta(minutes=9)]
+    row = {"ts_utc": ts_now, "origin": o}
+    try:
+        m_now, geo = read(k_now, "BCM", geos_cache)
+        row.update(regions(geo, m_now, "cf", "mean"))
+        if prev:
+            ts_p, k_p = prev[-1]
+            m_prev, _ = read(k_p, "BCM", geos_cache)
+            u, v, q = motion(m_prev, m_now, geo.dx_m, (ts_now - ts_p).total_seconds())
+            row.update({"motion_u": u, "motion_v": v, "motion_q": q, "motion_dt_s": (ts_now - ts_p).total_seconds()})
+        for prod, var, pre, use in (("ACHAC", "HT", "cth", True), ("CODC", "COD", "cod", bool(is_day))):
+            if not use:
+                continue
+            ks = [(ts, k) for hh in (want.floor("h") - pd.Timedelta(hours=1), want.floor("h"))
+                  for ts, k in listing[hh][prod] if abs((ts - ts_now).total_seconds()) < 60]
+            if ks:
+                a, g2 = read(ks[0][1], var, geos_cache)
+                reg = regions(g2, a, pre, "median")
+                row.update({k: v for k, v in reg.items() if k.endswith("_disc") or pre == "cth"})
+    except Exception as e:  # unreadable file: the row keeps what it has
+        row["error"] = repr(e)[:100]
+    return row
+
+
+def rows_for(origins: pd.DatetimeIndex, geos_cache: dict | None = None) -> pd.DataFrame:
+    geos_cache = {} if geos_cache is None else geos_cache
+    listing: dict = {}
     sol = solar.compute(origins)
-    for o, is_day in zip(origins, sol["is_day"].to_numpy()):
-        want = o - pd.Timedelta(minutes=lat)
-        cands = []
-        for hh in (want.floor("h") - pd.Timedelta(hours=1), want.floor("h")):
-            if hh not in listing:
-                listing[hh] = {p: scan_keys(p, hh) for p in ("ACMC", "ACHAC", "CODC")}
-            cands += listing[hh]["ACMC"]
-        cands = [(ts, k) for ts, k in cands if ts <= want]
-        if not cands:
-            continue
-        ts_now, k_now = cands[-1]
-        prev = [(ts, k) for ts, k in cands if ts <= ts_now - pd.Timedelta(minutes=9)]
-        row = {"ts_utc": ts_now, "origin": o}
-        try:
-            m_now, geo = read(k_now, "BCM", geos_cache)
-            row.update(regions(geo, m_now, "cf", "mean"))
-            if prev:
-                ts_p, k_p = prev[-1]
-                m_prev, _ = read(k_p, "BCM", geos_cache)
-                u, v, q = motion(m_prev, m_now, geo.dx_m, (ts_now - ts_p).total_seconds())
-                row.update({"motion_u": u, "motion_v": v, "motion_q": q, "motion_dt_s": (ts_now - ts_p).total_seconds()})
-            for prod, var, pre, use in (("ACHAC", "HT", "cth", True), ("CODC", "COD", "cod", bool(is_day))):
-                if not use:
-                    continue
-                ks = [(ts, k) for hh in (want.floor("h") - pd.Timedelta(hours=1), want.floor("h"))
-                      for ts, k in listing[hh][prod] if abs((ts - ts_now).total_seconds()) < 60]
-                if ks:
-                    a, g2 = read(ks[0][1], var, geos_cache)
-                    reg = regions(g2, a, pre, "median")
-                    row.update({k: v for k, v in reg.items() if k.endswith("_disc") or pre == "cth"})
-        except Exception as e:  # unreadable file: the row keeps what it has
-            row["error"] = repr(e)[:100]
-        rows.append(row)
+    rows = [r for o, is_day in zip(origins, sol["is_day"].to_numpy())
+            if (r := origin_row(o, bool(is_day), listing, geos_cache)) is not None]
     d = pd.DataFrame(rows)
     if len(d):
-        d["available_at"] = d.ts_utc + pd.Timedelta(minutes=lat)
+        d["available_at"] = d.ts_utc + pd.Timedelta(minutes=CFG.latency_min.goes)
     return d
+
+
+def day_rows(day: pd.Timestamp, geos_cache: dict) -> pd.DataFrame:
+    return rows_for(pd.date_range(day, day + pd.Timedelta(days=1), freq="30min", inclusive="left"), geos_cache)
 
 
 def job(day):

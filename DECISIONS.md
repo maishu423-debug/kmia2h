@@ -36,3 +36,12 @@
 - The sea-breeze switch (marine T_adv and b_onshore) acts only in daylight minutes. The ODE prior was refitted on 2022-2023 with that forcing (`params/ode_prior_s9_sb03.json`, which equals `ode_prior_s9_sbday.json`).
 - Experiment settings are passed through the `KMIA2H_OVERRIDE` environment variable (dotted keys), so runs can go side by side. The frozen values are written into config.yaml itself.
 - Phase 9 inputs: HFMETAR is never synthesised from 1-minute data in 2025-2026, because a live run has no 1-minute data. NDBC 2026 comes from the monthly files (Jan-Aug) plus the realtime file (from 2026-09-30). September 2026 is missing, so avail_ndbc is False then.
+
+## Phase 10 (2026-11-15)
+
+- The backtest month loop was split into `backtest.run_span` (filter + simulation over any span, in-memory source tables, optional starting ensemble) and `pipeline.frozen_probs` (frozen MOS on any frame). The backtest and Phase 9 call the same code, so `run.py` replays a stored forecast bit for bit; this was verified on a full month.
+- Replay keeps the backtest's semantics: no fallbacks are applied, only reported. Degradation is applied in the spinup and live modes. Otherwise replay could not reproduce the stored forecasts.
+- The live filter state is persisted 60 min before the origin, not at it, so the next run re-assimilates reports that reach IEM late (IEM HFMETAR lags 17–29 min).
+- KMIA routine METARs from aviationweather.gov are merged into the live obs table, with IEM rows kept on duplicates. It is the same station, so this does not break the no-substitute rule.
+- Climate-day composition assumes the observed and forecast parts are independent. The elapsed-part pmf was fitted on 2022–2023 and checked on 2024. When the 2-hour window crosses LST midnight, the cut-off forecast part uses spread-calibrated physics samples, because MOS was trained only on full windows.
+- The outage tests use 2024 origins, not Test A, so their costs can be scored without touching the test years.
