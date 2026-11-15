@@ -43,6 +43,17 @@ type ApiPayload = {
 
 type ModelResult = {
   error?:      string;
+  label?:      string;
+  window_utc?: [string, string] | null;
+  action?:     "ACT" | "ABSTAIN";
+  p_correct?:  number;
+  regime?:     string;
+  degraded?:   string[];
+  window_start_utc?: string;
+  covers_to_utc?:    string;
+  complete?:         boolean;
+  forecast_part?:    string;
+  observed_high_f?:  number | null;
   T0?:         number;
   mean?:       number;
   std?:        number;
@@ -84,6 +95,7 @@ type AlgorithmState = {
     ensemble:    { current_temp_f?: number; mean?: number; mode?: number; mode_prob?: number; p10?: number; p90?: number; n_models?: number; dist?: Array<{ temp: number; prob: number }> };
     last_run_at: string | null;
     running:     boolean;
+    model_order?: string[];
     loop?:       { waiting_for_hfmetar?: { reason: string; since: string } | null } | null;
   };
   temp:           { current_f: number | null; daily_high_f: number | null; daily_high_display_f?: number | null; daily_high_raw_f?: number | null };
@@ -95,11 +107,13 @@ type AlgorithmState = {
 
 // ── Formatters ───────────────────────────────────────────────────────────────
 
+// The market of the day follows the NWS climate day: midnight to midnight EST (UTC-5) all year, so
+// 00:00-01:00 EDT in summer still belongs to the previous day's market. Never the browser's local date.
 function todayEventTicker() {
-  const d = new Date();
-  const yy  = String(d.getFullYear()).slice(-2);
-  const mon = ["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"][d.getMonth()];
-  const dd  = String(d.getDate()).padStart(2, "0");
+  const d = new Date(Date.now() - 5 * 3600 * 1000);
+  const yy  = String(d.getUTCFullYear()).slice(-2);
+  const mon = ["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"][d.getUTCMonth()];
+  const dd  = String(d.getUTCDate()).padStart(2, "0");
   return `KXHIGHMIA-${yy}${mon}${dd}`;
 }
 const DEFAULT_MARKET = `${todayEventTicker()}-B94.5`;
@@ -120,16 +134,34 @@ function pct(value: number | null | undefined) {
   return `${(value * 100).toFixed(1)}%`;
 }
 
+// The three kmia2h forecasts (kalshi_api/forecast.py). Only the day high drives the trades.
+const MODEL_KEYS = ["kmia2h_high_2h", "kmia2h_low_2h", "kmia2h_day_high"] as const;
+
 function modelLabel(key: string) {
   const map: Record<string, string> = {
-    accuweather_1h: "AccuWeather +1h",
-    accuweather_2h: "AccuWeather +2h",
-    accuweather_3h: "AccuWeather +3h",
-    var_1h:         "VAR(1) +1h",
-    var_2h:         "VAR(1) +2h",
-    var_3h:         "VAR(1) +3h",
+    kmia2h_high_2h:  "2-h high",
+    kmia2h_low_2h:   "2-h low",
+    kmia2h_day_high: "Day high",
   };
   return map[key] ?? key;
+}
+
+function hhmm(iso: string | undefined | null) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  return d.toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "numeric", minute: "2-digit" });
+}
+
+// One line under each card: the forecast window (Eastern time) and, for the 2-hour forecasts, the abstain rule.
+function modelWindow(key: string, m: ModelResult, lastRunAt: string | null | undefined) {
+  if (key === "kmia2h_day_high") {
+    const to = hhmm(m.covers_to_utc);
+    return `midnight EST → ${to} ET${m.complete ? "" : " (partial day)"}`;
+  }
+  const origin = lastRunAt ? new Date(lastRunAt + "Z") : null;
+  const end = origin ? new Date(origin.getTime() + 120 * 60 * 1000) : null;
+  const fmt = (d: Date | null) => d ? d.toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "numeric", minute: "2-digit" }) : "—";
+  return `next 2 h: ${fmt(origin)} → ${fmt(end)} ET · ${m.action ?? "—"}`;
 }
 
 // ── Probability Distribution Chart ───────────────────────────────────────────
@@ -291,15 +323,7 @@ export default function Home() {
   const [forecastHistory, setForecastHistory]   = useState<ForecastHistoryRow[]>([]);
   const lastHistoryForecastRunAtRef = useRef<string | null>(null);
 
-  // Model enable/disable switches
-  const ALL_MODELS = ["accuweather_1h", "accuweather_2h", "accuweather_3h", "var_1h", "var_2h", "var_3h"] as const;
-  type ModelKey = typeof ALL_MODELS[number];
-  const [enabledModels, setEnabledModels]       = useState<Record<ModelKey, boolean>>({
-    accuweather_1h: true, accuweather_2h: true, accuweather_3h: true,
-    var_1h: true,         var_2h: true,         var_3h: true,
-  });
-  const enabledModelsRef = useRef(enabledModels);
-  enabledModelsRef.current = enabledModels;
+  const ALL_MODELS = MODEL_KEYS;
 
   // ── Init: read market ticker from URL ──────────────────────────────────
   useEffect(() => {
@@ -448,12 +472,7 @@ export default function Home() {
   // ── Algorithm state polling (5 s) ─────────────────────────────────────
   const loadAlgoState = useCallback(async () => {
     try {
-      const active = Object.entries(enabledModelsRef.current)
-        .filter(([, on]) => on).map(([k]) => k).join(",");
-      const res = await fetch(
-        `/api/kalshi/algorithm/state${active ? `?enabled_models=${encodeURIComponent(active)}` : ""}`,
-        { cache: "no-store" }
-      );
+      const res = await fetch("/api/kalshi/algorithm/state", { cache: "no-store" });
       if (!res.ok) {
         let detail = "";
         try {
@@ -527,7 +546,7 @@ export default function Home() {
 
   async function refreshForecast() {
     setIsRefreshingForecast(true);
-    setAlgoMessage("Forecast refresh started — all 6 models are running (~2–3 min). Page will update automatically.");
+    setAlgoMessage("Forecast refresh started — the kmia2h model is running (~10–20 s). Page will update automatically.");
     try {
       await fetch("/api/kalshi/algorithm/refresh", { method: "POST" });
     } finally {
@@ -649,34 +668,24 @@ export default function Home() {
           <div className="algo-models">
             <h3 className="algo-section-title">Forecast Models</h3>
             {!modelsReady && !algoState?.forecast?.running && (
-              <p className="algo-hint">No forecast yet — click <strong>Refresh Forecast</strong> to run all 6 models.</p>
+              <p className="algo-hint">No forecast yet — the model runs every 5 min; click <strong>Refresh Forecast</strong> to run it now.</p>
             )}
             {algoState?.forecast?.loop?.waiting_for_hfmetar && (
               <p className="algo-running">
                 ⏳ Waiting for HFMETAR since {new Date(algoState.forecast.loop.waiting_for_hfmetar.since + "Z").toLocaleTimeString()} — {algoState.forecast.loop.waiting_for_hfmetar.reason.replace("weather_unavailable: ", "")}.
-                {" "}No other source is used; retrying every 30 s and the models run as soon as it returns.
+                {" "}No other source is used; retrying every 30 s and the model runs as soon as it returns.
               </p>
             )}
             {algoState?.forecast?.running && (
-              <p className="algo-running">⏳ Models running… (~2–3 min). Page polls every 5 s.</p>
+              <p className="algo-running">⏳ Model running… (~10–20 s). Page polls every 5 s.</p>
             )}
             <div className="model-grid">
               {ALL_MODELS.map((key) => {
                 const m = algoState?.forecast?.models?.[key];
-                const isOn = enabledModels[key];
                 return (
-                  <div key={key} className={`model-card ${m?.error ? "model-card--error" : ""} ${!isOn ? "model-card--disabled" : ""}`}>
+                  <div key={key} className={`model-card ${m?.error ? "model-card--error" : ""}`}>
                     <div className="model-name">
-                      <label className="model-switch">
-                        <input
-                          type="checkbox"
-                          checked={isOn}
-                          onChange={(e) => {
-                            setEnabledModels((prev) => ({ ...prev, [key]: e.target.checked }));
-                          }}
-                        />
-                        {modelLabel(key)}
-                      </label>
+                      {modelLabel(key)}{key === "kmia2h_day_high" ? " · trades" : ""}
                     </div>
                     {!m ? (
                       <div className="model-error">No data yet</div>
@@ -698,6 +707,9 @@ export default function Home() {
                           <span className="ci-high">{m.p90?.toFixed(1)}</span>
                           <span className="ci-label">10–90th</span>
                         </div>
+                        <div className="model-meta">
+                          <span>{modelWindow(key, m, algoState?.forecast?.last_run_at)}</span>
+                        </div>
                       </>
                     )}
                   </div>
@@ -705,7 +717,7 @@ export default function Home() {
               })}
               {ensemble && ensemble.n_models! > 0 && (
                 <div className="model-card model-card--ensemble">
-                  <div className="model-name">Daily High Forecast ({ensemble.n_models} models)</div>
+                  <div className="model-name">Daily High Forecast (day high, floored at the recorded high)</div>
                   <div className="model-main">
                     {ensemble.mode != null ? `${ensemble.mode}°F` : "—"}
                     <span className="model-sub"> mode</span>
@@ -893,7 +905,7 @@ export default function Home() {
                 return (
                   <section
                     key={key}
-                    className={`model-dist-panel ${m?.error ? "model-dist-panel--error" : ""} ${!enabledModels[key] ? "model-dist-panel--disabled" : ""}`}
+                    className={`model-dist-panel ${m?.error ? "model-dist-panel--error" : ""}`}
                   >
                     <div className="model-dist-panel-head">
                       <div>

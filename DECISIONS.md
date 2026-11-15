@@ -68,3 +68,9 @@
   - *Filter state:* persisted at `KMIA2H_STATE_FILE` (`/data/kmia2h_filter_state.npz` on Railway).
 - The algorithm's daily-high PDF is `kmia2h_day_high` floored at the proven recorded high (`_floor_pdf_at`, unchanged). `HORIZON_WEIGHTS`, `HORIZON_MIX` and the CDF-product fallback are gone; the trade rule is untouched.
 - **Caveat:** before ~22:00 LST the climate-day high covers LST midnight to now + 2 h, not the whole day (kmia2h forecasts 2 hours), and the page shows that window. In the trading window (12:30–15:30 ET) it reaches 14:30–17:30 ET.
+- **Part 4 — UI.** Three cards replace the six model cards:
+  - *2-h high* and *2-h low*: the next 2 hours in Eastern time, plus the abstain rule's ACT / ABSTAIN.
+  - *Day high* (marked "trades"): from midnight EST to the end of the forecast window, labelled "partial day" until the window reaches midnight.
+
+  The per-model enable switches are gone, because only the day high drives trading. The `enabled_models` query parameter still works on the API. Unchanged: the DSM panel, the probability distribution and bracket analysis (fed by the day-high PDF floored at the recorded high), forecast history, paper trading and trade history. The page's default market ticker used the browser's local date; it now uses the climate day (UTC−5).
+- Node.js (24, from the `nodejs-wheel-binaries` package) and Playwright are installed in a git-ignored tools environment, `site/.tools`, for the local build and screenshot. The machine has no system Node, and system package installs were not available. Railway builds the frontend with its own Node.
