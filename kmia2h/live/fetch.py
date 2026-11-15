@@ -75,9 +75,21 @@ def fetch_awc(origin: pd.Timestamp) -> pd.DataFrame:
     return d[d.ts_utc <= origin].reset_index(drop=True)
 
 
-def fetch_ndbc(origin: pd.Timestamp) -> pd.DataFrame:
+NDBC_REALTIME = "https://www.ndbc.noaa.gov/data/realtime2/{}.txt"
+
+
+def _ndbc_realtime(st: str) -> pd.DataFrame | None:
+    """The 45-day realtime file, parsed in memory (a live run saves nothing to disk)."""
+    import requests
     from kmia2h.data import fetch_ndbc as nd
-    parts = [r for st in CFG.buoys if (r := nd.fetch_realtime(st, f"{origin:%Y%m%d%H%M}")) is not None]
+    r = requests.get(NDBC_REALTIME.format(st.upper()), headers={"User-Agent": "kmia2h-forecast"}, timeout=30)
+    if r.status_code != 200:
+        return None
+    return nd.parse(io.StringIO(r.text), st)
+
+
+def fetch_ndbc(origin: pd.Timestamp) -> pd.DataFrame:
+    parts = [r for st in CFG.buoys if (r := _ndbc_realtime(st)) is not None]
     d = pd.concat(parts, ignore_index=True)
     d = d[(d.ts_utc >= origin - HISTORY) & (d.ts_utc <= origin)].copy()
     d["available_at"] = d.ts_utc + pd.Timedelta(minutes=CFG.latency_min.ndbc)

@@ -1,7 +1,8 @@
 {
   "$schema": "https://railway.com/railway.schema.json",
   "build": {
-    "buildCommand": "npm run build"
+    "buildCommand": "npm run build",
+    "watchPatterns": ["site/frontend/**"]
   },
   "deploy": {
     "startCommand": "npm run start -- --hostname :: --port ${PORT:-3000}",

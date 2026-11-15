@@ -1,9 +1,15 @@
 {
   "$schema": "https://railway.com/railway.schema.json",
+  "build": {
+    "builder": "DOCKERFILE",
+    "dockerfilePath": "site/backend/Dockerfile",
+    "watchPatterns": ["site/backend/**", "kmia2h/**", "config.yaml", "params/**", "models/**", "pyproject.toml", "uv.lock"]
+  },
   "deploy": {
-    "startCommand": "python manage.py migrate && gunicorn config.wsgi:application --bind [::]:${PORT:-8000} --workers 1 --threads 8 --timeout 0 --access-logfile -",
+    "startCommand": "sh -c 'python manage.py migrate && gunicorn config.wsgi:application --bind [::]:${PORT:-8000} --workers 1 --threads 8 --timeout 0 --access-logfile -'",
     "healthcheckPath": "/api/kalshi/health/",
     "healthcheckTimeout": 300,
+    "numReplicas": 1,
     "restartPolicyType": "ON_FAILURE",
     "restartPolicyMaxRetries": 10
   }
