@@ -60,9 +60,8 @@ def _headers():
 def hours_needed(now=None, lookback_hours=cfg.ASOS_LOOKBACK_HOURS):
     """Hours back to cover both the nowcast lookback and today's Miami-local day."""
     now = now or datetime.now(timezone.utc)
-    midnight = now.astimezone(ZoneInfo(cfg.LOCAL_TZ_NAME)).replace(
-        hour=0, minute=0, second=0, microsecond=0)
-    since_midnight = (now - midnight.astimezone(timezone.utc)).total_seconds() / 3600.0
+    from .climate_day import climate_day_start
+    since_midnight = (now - climate_day_start(now)).total_seconds() / 3600.0
     return max(float(lookback_hours), since_midnight) + 0.5
 
 

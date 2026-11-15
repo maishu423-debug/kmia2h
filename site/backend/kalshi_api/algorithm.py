@@ -1,9 +1,9 @@
 """
 Model-driven paper-trading strategy.
 
-ENSEMBLE:     Each of the 6 models (A1,V1,A2,V2,A3,V3) yields a daily-high PDF
-              (max over its simulated paths); they are mixed with
-              HORIZON_MIX[h] * in-pair weight into one daily-high PDF.
+FORECAST:     The kmia2h model (kalshi_api/forecast.py) gives three distributions: the 2-hour high, the 2-hour
+              low and the climate-day high (the observed part of the day composed with the forecast). The
+              daily-high PDF used for trading is the climate-day high, floored at the proven recorded high.
 EACH CYCLE:   Rank the live Kalshi buckets by model probability.
               YES: on the single highest-probability live bucket.
               NO:  on every other live bucket.
@@ -13,37 +13,25 @@ NO SELLING:   Contracts are held until Kalshi settles the market.
 """
 from collections import defaultdict
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 from weather.asos_resolution import lower_bound_whole_f
 
-from .forecast import get_forecast_cache
+from .forecast import DAY_HIGH_MODEL, MODELS, get_forecast_cache
 from .price_tracker import get_all_velocities, get_temp_snapshot, nws_round_temp_f
 
 
-MIAMI_UTC_OFFSET  = -4
+MIAMI_TZ          = ZoneInfo("America/New_York")   # wall clock: EDT in summer, EST in winter
 CUTOFF_LOCAL_HOUR = 16
 
 # Never pay more than this for a contract (above it there is no upside left).
 NO_MAX_PRICE_CENTS = 98
 YES_MAX_PRICE_CENTS = 98
 
-# Weighted combination within each horizon pair.
-# AccuWeather and Variable-combined models are paired by forecast horizon.
-# Weights can be tuned from backtesting results.
-HORIZON_WEIGHTS = {
-    "1h": {"accuweather_1h": 0.5788, "var_1h": 0.4212},
-    "2h": {"accuweather_2h": 0.5744, "var_2h": 0.4256},
-    "3h": {"accuweather_3h": 0.5643, "var_3h": 0.4357},
-}
-
-# Weight of each horizon pair in the final daily-high mixture (all six models contribute).
-# Equal by default; tune from backtesting. Only the ratios matter (re-normalized).
-HORIZON_MIX = {"1h": 1.0, "2h": 1.0, "3h": 1.0}
-
-
-def hours_to_cutoff() -> float:
-    now = datetime.now(timezone.utc)
-    local_h = (now.hour + MIAMI_UTC_OFFSET) % 24 + now.minute / 60.0
+def hours_to_cutoff(now: datetime | None = None) -> float:
+    """Hours until 4 PM Eastern wall-clock time (zoneinfo handles EDT / EST)."""
+    local = (now or datetime.now(timezone.utc)).astimezone(MIAMI_TZ)
+    local_h = local.hour + local.minute / 60.0 + local.second / 3600.0
     return max(0.0, CUTOFF_LOCAL_HOUR - local_h)
 
 
@@ -58,66 +46,18 @@ def _nws_known_high_f(*values) -> int | None:
     return max(bounds) if bounds else None
 
 
-# ── Step 1: same-horizon ensemble PDFs ───────────────────────────────────────
+# ── Daily-high PDF: the kmia2h climate-day high ────────────────────────────────
 
-def _get_horizon_pdfs(results: dict) -> dict:
-    """
-    For each horizon (1h, 2h, 3h) compute a weighted ensemble PDF over
-    integer temperatures.  If one model in a pair is missing/failed, the
-    available model gets full weight (after re-normalizing).
-
-    Returns {horizon_key: {temp_int: probability}}.
-    """
-    horizon_pdfs: dict[str, dict[int, float]] = {}
-
-    for horizon, weights in HORIZON_WEIGHTS.items():
-        combined: dict[int, float] = defaultdict(float)
-        total_weight = 0.0
-
-        for model_name, weight in weights.items():
-            data = results.get(model_name, {})
-            if "error" in data or "temps" not in data or "probs" not in data:
-                continue
-            for t, p in zip(data["temps"], data["probs"]):
-                combined[int(t)] += weight * p
-            total_weight += weight
-
-        if not combined or total_weight == 0:
-            continue
-
-        norm = sum(combined.values())
-        if norm > 0:
-            horizon_pdfs[horizon] = {t: p / norm for t, p in combined.items()}
-
-    return horizon_pdfs
-
-
-# ── Step 2: daily-high PDF ───────────────────────────────────────────────────
-
-def _get_path_high_pdf(results: dict) -> dict:
-    """
-    Daily-high PDF from ALL six models, built from the running maximum of each
-    model's *simulated paths* (keys "high_temps"/"high_probs").  Each model's
-    PDF is weighted by HORIZON_MIX[horizon] * its in-pair weight from
-    HORIZON_WEIGHTS; models that errored, are disabled or lack the keys are
-    dropped and the rest re-normalized.  Returns {} if no model provides it so
-    the caller can fall back.
-    """
-    combined: dict[int, float] = defaultdict(float)
-    total_weight = 0.0
-    for horizon, pair in HORIZON_WEIGHTS.items():
-        for model_name, pair_weight in pair.items():
-            data = results.get(model_name, {})
-            if "error" in data or "high_temps" not in data or "high_probs" not in data:
-                continue
-            weight = HORIZON_MIX[horizon] * pair_weight
-            for t, p in zip(data["high_temps"], data["high_probs"]):
-                combined[int(t)] += weight * p
-            total_weight += weight
-    if not combined or total_weight == 0:
+def _get_day_high_pdf(results: dict) -> dict:
+    """{temp: prob} from the climate-day high entry ("high_temps"/"high_probs"); {} if it is missing or failed."""
+    data = results.get(DAY_HIGH_MODEL) or {}
+    if "error" in data or "high_temps" not in data or "high_probs" not in data:
         return {}
-    norm = sum(combined.values())
-    return {t: p / norm for t, p in combined.items()} if norm > 0 else {}
+    pdf: dict[int, float] = defaultdict(float)
+    for t, p in zip(data["high_temps"], data["high_probs"]):
+        pdf[int(t)] += float(p)
+    norm = sum(pdf.values())
+    return {t: p / norm for t, p in pdf.items()} if norm > 0 else {}
 
 
 def _floor_pdf_at(pdf: dict, known_high_f: float | None) -> dict:
@@ -131,59 +71,9 @@ def _floor_pdf_at(pdf: dict, known_high_f: float | None) -> dict:
     return dict(out)
 
 
-def _compute_daily_high_pdf(horizon_pdfs: dict, known_high_f: float | None,
-                            path_high_pdf: dict | None = None) -> dict:
-    """
-    P(final daily high = k) over integer temperatures.
-
-    Preferred: `path_high_pdf`, the PDF of the max over each simulated path (see
-    _get_path_high_pdf), floored at the observed high.
-
-    Fallback (only when path PDFs are unavailable): treat the hourly draws as
-    independent and take their max with the observed current high,
-
-      P(final_high <= k) = 0                       if k < rounded known_high
-                         = prod_h P(T_h <= k)       otherwise
-
-    This is biased warm — the horizons are strongly correlated, and the product
-    of CDFs of correlated variables is smaller than the CDF of their max (~+0.5F).
-    """
-    if path_high_pdf:
-        return _floor_pdf_at(path_high_pdf, known_high_f)
-    if not horizon_pdfs:
-        return {}
-
-    all_temps: set[int] = set()
-    for pdf in horizon_pdfs.values():
-        all_temps.update(pdf.keys())
-    if not all_temps:
-        return {}
-
-    h_now  = nws_round_temp_f(known_high_f) if known_high_f is not None else min(all_temps)
-    t_min  = min(min(all_temps), h_now)
-    t_max  = max(all_temps)
-
-    def _cdf(pdf: dict, k: int) -> float:
-        return sum(p for t, p in pdf.items() if t <= k)
-
-    prev_cdf = 0.0
-    high_pdf: dict[int, float] = {}
-    for k in range(t_min, t_max + 2):
-        if k < h_now:
-            cur_cdf = 0.0
-        else:
-            cur_cdf = 1.0
-            for pdf in horizon_pdfs.values():
-                cur_cdf *= _cdf(pdf, k)
-        p = cur_cdf - prev_cdf
-        if p > 1e-6:
-            high_pdf[k] = p
-        prev_cdf = cur_cdf
-
-    total = sum(high_pdf.values())
-    if total > 0:
-        high_pdf = {k: p / total for k, p in high_pdf.items()}
-    return high_pdf
+def _compute_daily_high_pdf(known_high_f: float | None, day_high_pdf: dict | None) -> dict:
+    """P(final daily high = k): the climate-day high PDF, floored at the proven recorded high."""
+    return _floor_pdf_at(day_high_pdf, known_high_f) if day_high_pdf else {}
 
 
 # ── Step 3: bracket probability from daily-high PDF ──────────────────────────
@@ -300,8 +190,7 @@ def get_recommendation(analyses: list, results=None) -> dict:
     temp     = get_temp_snapshot()
     known_hi = _nws_known_high_f(temp.get("current_f"), temp.get("daily_high_f"))
 
-    horizon_pdfs = _get_horizon_pdfs(results)
-    high_pdf     = _compute_daily_high_pdf(horizon_pdfs, known_hi, _get_path_high_pdf(results))
+    high_pdf     = _compute_daily_high_pdf(known_hi, _get_day_high_pdf(results))
     has_models   = bool(high_pdf)
 
     def waiting(reason, mean=None):
@@ -369,9 +258,8 @@ def get_recommendation(analyses: list, results=None) -> dict:
 
 
 def _compute_ensemble_stats(results: dict, known_hi: float | None, current_temp_f: float | None) -> dict:
-    """Ensemble daily-high forecast stats (mean/mode/p10/p90/dist) from model results."""
-    horizon_pdfs = _get_horizon_pdfs(results)
-    high_pdf      = _compute_daily_high_pdf(horizon_pdfs, known_hi, _get_path_high_pdf(results))
+    """Daily-high forecast stats (mean/mode/p10/p90/dist): the climate-day high, floored at the recorded high."""
+    high_pdf      = _compute_daily_high_pdf(known_hi, _get_day_high_pdf(results))
     if not high_pdf:
         return {}
 
@@ -457,6 +345,9 @@ def get_full_state(markets: list, paper_state=None, enabled_models=None) -> dict
             probs = data.get("probs", [])
             temps = data.get("temps", [])
             models_summary[name] = {
+                **{k: data.get(k) for k in ("label", "window_utc", "action", "p_correct", "edge", "regime",
+                                            "degraded", "window_start_utc", "covers_to_utc", "complete",
+                                            "forecast_part", "observed_high_f") if k in data},
                 "T0":         data.get("T0"),
                 "mean":       data.get("mean"),
                 "std":        data.get("std"),
@@ -491,6 +382,8 @@ def get_full_state(markets: list, paper_state=None, enabled_models=None) -> dict
     return {
         "forecast": {
             "models":      models_summary,
+            "model_order": [m["name"] for m in MODELS],
+            "run":         cache.get("run"),
             "ensemble":    ensemble,
             "last_run_at": cache.get("last_run_at"),
             "running":     cache.get("running", False),

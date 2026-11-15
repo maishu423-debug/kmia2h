@@ -482,7 +482,7 @@ def test_utc_midnight_rollover_uses_yesterdays_23h_file_as_previous_hour(tmp_pat
     assert ldm_name(h23) in server.downloads() and newest(observations) == "2026-10-29T00:00:00+00:00"
 
 
-def test_recorded_high_survives_utc_midnight_and_resets_at_miami_midnight(tmp_path):
+def test_recorded_high_survives_utc_midnight_and_resets_at_lst_midnight(tmp_path):
     server = FakeLdm()
     h20 = datetime(2026, 10, 28, 20, tzinfo=UTC)               # 16:00 Miami, the hot part of the day
     h00 = datetime(2026, 10, 29, 0, tzinfo=UTC)                # 20:00 Miami
@@ -493,18 +493,26 @@ def test_recorded_high_survives_utc_midnight_and_resets_at_miami_midnight(tmp_pa
     observations, _ = feed.poll(now=now)
     today = asos_nowcast.todays_high(observations, now)
     assert today["miami_date"] == "2026-10-28" and today["high_f"] == pytest.approx(91.0)
-    # Miami midnight is 04:00Z on Oct 29: the new day must not inherit yesterday's 91
+    # The climate day ends at LST midnight = 05:00Z all year (BUILD_SITE.md): 00:15 EDT is still Oct 28
     h04 = datetime(2026, 10, 29, 4, tzinfo=UTC)
     server.publish(h04, obs(h04, [5, 10], base=75.0))
-    later = datetime(2026, 10, 29, 4, 15, tzinfo=UTC)
+    still = datetime(2026, 10, 29, 4, 15, tzinfo=UTC)
+    observations, _ = feed.poll(now=still)
+    today = asos_nowcast.todays_high(observations, still)
+    assert today["miami_date"] == "2026-10-28" and today["high_f"] == pytest.approx(91.0)
+    # after 05:00Z the new climate day must not inherit yesterday's 91
+    h05 = datetime(2026, 10, 29, 5, tzinfo=UTC)
+    server.publish(h05, obs(h05, [5, 10], base=74.0))
+    later = datetime(2026, 10, 29, 5, 15, tzinfo=UTC)
     observations, _ = feed.poll(now=later)
     today = asos_nowcast.todays_high(observations, later)
-    assert today["miami_date"] == "2026-10-29" and today["high_f"] == pytest.approx(75.1)
+    assert today["miami_date"] == "2026-10-29" and today["high_f"] == pytest.approx(74.1)
 
 
-def test_hours_needed_covers_the_miami_day_across_dst():
-    assert asos_client.hours_needed(datetime(2026, 11, 1, 12, 0, tzinfo=UTC)) == pytest.approx(8.5)    # EDT midnight 04:00Z
-    assert asos_client.hours_needed(datetime(2026, 11, 2, 12, 0, tzinfo=UTC)) == pytest.approx(7.5)    # EST midnight 05:00Z
+def test_hours_needed_covers_the_climate_day_across_dst():
+    # the climate day starts at LST midnight = 05:00Z on both sides of the DST change
+    assert asos_client.hours_needed(datetime(2026, 11, 1, 12, 0, tzinfo=UTC)) == pytest.approx(7.5)
+    assert asos_client.hours_needed(datetime(2026, 11, 2, 12, 0, tzinfo=UTC)) == pytest.approx(7.5)
 
 
 def test_hours_the_ldm_api_no_longer_holds_are_reported_when_backfill_is_off(tmp_path):

@@ -18,11 +18,11 @@ def _bucket(ticker, floor, cap, yes_ask, no_ask, dead=False):
 
 
 def _run(monkeypatch, buckets, pdf):
-    """pdf: {temp: prob}; the model results are a single point-mass-per-temp 3h model."""
+    """pdf: {temp: prob}; the model result is the kmia2h climate-day high entry."""
     temps = list(pdf)
     model = {"temps": temps, "probs": list(pdf.values()), "high_temps": temps, "high_probs": list(pdf.values())}
     monkeypatch.setattr(alg, "get_temp_snapshot", lambda: {"current_f": None, "daily_high_f": None})
-    return alg.get_recommendation(buckets, results={"accuweather_3h": model})
+    return alg.get_recommendation(buckets, results={"kmia2h_day_high": model})
 
 
 # Model: 50% on 88, 30% on 90, 20% on 92 -> buckets [87,89) 50%, [89,91) 30%, [91,93) 20%

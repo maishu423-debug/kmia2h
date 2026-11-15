@@ -17,7 +17,9 @@ Replay keeps the backtest's semantics exactly and only reports what is degraded.
 from __future__ import annotations
 
 import json
+import os
 import time
+from pathlib import Path
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -35,7 +37,8 @@ STATE_MAX_AGE = pd.Timedelta(hours=CFG.filter.spinup_hours)
 # valid after it but reached IEM late (IEM HFMETAR runs ~30 min behind real time).
 STATE_LAG = pd.Timedelta(minutes=60)
 LIVE_DIR = ROOT / CFG.paths.out / "live"
-STATE_FILE = ROOT / "data" / "live" / "filter_state.npz"
+# KMIA2H_STATE_FILE: where the live filter state is persisted (the website keeps it on its /data volume)
+STATE_FILE = Path(os.environ.get("KMIA2H_STATE_FILE") or ROOT / "data" / "live" / "filter_state.npz")
 
 
 # ---- source tables ---------------------------------------------------------------------------

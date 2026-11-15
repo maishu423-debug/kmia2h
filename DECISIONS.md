@@ -53,3 +53,18 @@
 - `asos_shadow` (LDM-vs-public comparison) is not on the copy list, so its hook in `asos_client.fetch_recent_observations`, its field in `/weather/source` and its tests were removed. The LDM-vs-public HTML report view (`/weather/report`) and its tests were removed too, because they load `tools/ldm_vs_public_report.py`. So were the unused `debug_pem` / `debug_ws` views. None of these were routed to the UI's data.
 - The HFMETAR last-good file moved from `modelscripts/asos_last_good.json` to `site/backend/data/asos_last_good.json` (still overridable with `ASOS_STATE_PATH`; `/data/asos_last_good.json` on Railway).
 - One Python environment for the model and the site: Django 6.0.6 and the old backend's other pins are a `site` extra in `pyproject.toml`. Python is 3.12 (the old backend used 3.13.2; `kmia2h`'s scientific stack is pinned for 3.12). `requires-python` is now `>=3.12,<3.13`, since Django 6 needs 3.12.
+- **Part 2 — timezone fixes.** `hours_to_cutoff` reads the Eastern wall clock through `zoneinfo` America/New_York (it hard-coded UTC−4, so in winter it reported the market closed an hour early). The climate day is one helper, `weather/climate_day.py` (fixed UTC−5 all year). It is used for:
+  - the recorded high (`asos_nowcast.todays_high` and the price tracker's daily reset);
+  - DSM matching and the NWS hourly-report high (`nws.py`);
+  - the feed look-back (`asos_client.hours_needed`);
+  - the Kalshi event of the day (`client.get_today_event_ticker`, which used the server's `date.today()`, i.e. UTC on Railway);
+  - the forecast log's date and the climate-day forecast window.
+
+  In summer, 00:00–01:00 EDT counts toward the previous day. The trading schedule (12:30–15:30) and the 4 PM cutoff stay on Eastern wall-clock time. Three copied tests that asserted the old Eastern-day behaviour now assert the climate day.
+- **Part 3 — forecast.** `kalshi_api/forecast.py` is new and runs kmia2h in process every 5 min (`kmia2h.live.run.forecast`, mode `live`, window start = LST midnight).
+  - *KMIA HFMETAR:* the temperature monitor's feed cache, read with `reuse_seconds = 15 min`, so the forecast never starts a NOAA / LDM download itself. Fields are mapped to the model's observation table. Cloud fraction becomes the nearest METAR cover code. `available_at` = observation + 8 min, the latency the frozen model was fitted with (a faster LDM report is used 8 min after its time, never before).
+  - *Everything else:* kmia2h's live fetchers (IEM neighbours and KMIA routine METARs, aviationweather.gov METARs, NDBC, GOES, MRMS, HRRR). Their KMIA HFMETAR rows are dropped in favour of the monitor's.
+  - *Output:* three entries (`kmia2h_high_2h`, `kmia2h_low_2h`, `kmia2h_day_high`) in the old JSON shape. A model ABSTAIN gives `{"error": "ABSTAIN: …"}` entries and the algorithm waits.
+  - *Filter state:* persisted at `KMIA2H_STATE_FILE` (`/data/kmia2h_filter_state.npz` on Railway).
+- The algorithm's daily-high PDF is `kmia2h_day_high` floored at the proven recorded high (`_floor_pdf_at`, unchanged). `HORIZON_WEIGHTS`, `HORIZON_MIX` and the CDF-product fallback are gone; the trade rule is untouched.
+- **Caveat:** before ~22:00 LST the climate-day high covers LST midnight to now + 2 h, not the whole day (kmia2h forecasts 2 hours), and the page shows that window. In the trading window (12:30–15:30 ET) it reaches 14:30–17:30 ET.

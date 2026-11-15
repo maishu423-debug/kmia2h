@@ -56,11 +56,13 @@ def _auth_headers_full(method: str, api_path: str) -> dict:
         return {}
 
 
-def get_today_event_ticker() -> str:
-    """Build the event ticker for today's Miami temperature market.
-    Kalshi format: KXHIGHMIA-YYMMMDD  e.g. KXHIGHMIA-26JUN21
+def get_today_event_ticker(now=None) -> str:
+    """Build the event ticker for the current climate day's Miami temperature market.
+    Kalshi format: KXHIGHMIA-YYMMMDD  e.g. KXHIGHMIA-26JUN21. The market settles on the NWS climate day
+    (midnight to midnight EST all year), so 00:00-01:00 EDT still belongs to the previous day's event.
     """
-    return f"KXHIGHMIA-{date.today().strftime('%y%b%d').upper()}"
+    from weather.climate_day import climate_date
+    return f"KXHIGHMIA-{climate_date(now).strftime('%y%b%d').upper()}"
 
 
 def get_default_market_ticker() -> str:

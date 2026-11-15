@@ -36,7 +36,9 @@ MIAMI_TZ = ZoneInfo("America/New_York")
 
 
 def _today_key() -> str:
-    return datetime.now(MIAMI_TZ).date().isoformat()
+    """The climate day (midnight to midnight EST all year): the recorded high resets at 01:00 EDT in summer."""
+    from weather.climate_day import climate_date
+    return climate_date().isoformat()
 
 
 def nws_round_temp_f(temp_f: float) -> int:

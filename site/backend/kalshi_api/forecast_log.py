@@ -28,8 +28,10 @@ def append_forecast(ensemble: dict, current_f, known_high_f, now=None):
         if not ensemble or ensemble.get("mean") is None:
             return
         now = now or datetime.now(timezone.utc)
+        from weather.climate_day import climate_date
         local = now.astimezone(ZoneInfo("America/New_York"))
-        row = [now.isoformat(), local.date().isoformat(), round(local.hour + local.minute / 60.0, 2),
+        # local_date = the climate day (LST) the forecast is for; local_hour = Eastern wall clock
+        row = [now.isoformat(), climate_date(now).isoformat(), round(local.hour + local.minute / 60.0, 2),
                current_f, known_high_f, ensemble.get("mean"), ensemble.get("mode"),
                ensemble.get("p10"), ensemble.get("p90"), ensemble.get("n_models")]
         path = _path()

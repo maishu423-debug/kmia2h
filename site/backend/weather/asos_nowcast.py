@@ -45,12 +45,12 @@ def freshness_status(age_seconds):
 
 def todays_high(observations, now=None):
     """
-    Highest valid ASOS temperature (deg F) observed so far on the current
-    America/New_York calendar day.  Input is already QC'd and de-duplicated
+    Highest valid ASOS temperature (deg F) observed so far in the current
+    climate day (midnight to midnight local STANDARD time, weather/climate_day.py).  Input is already QC'd and de-duplicated
     (one record per UTC minute); observations in the future are ignored.
     """
     now = now or datetime.now(timezone.utc)
-    tz = ZoneInfo(cfg.LOCAL_TZ_NAME)
+    from .climate_day import LST as tz
     today = now.astimezone(tz).date()
     best, best_at, n = None, None, 0
     for o in observations:

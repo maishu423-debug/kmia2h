@@ -130,11 +130,14 @@ def test_yesterdays_dsm_is_ignored(monkeypatch):
     assert "not today" in nws.last_floor_decision()["reason"]
 
 
-def test_in_summer_between_midnight_and_1am_edt_no_dsm_date_can_match(monkeypatch):
-    now = datetime(2026, 7, 15, 4, 30, tzinfo=timezone.utc)           # 00:30 EDT = 23:30 LST the day before
-    for date in ("2026-07-14", "2026-07-15"):
-        use_dsm(monkeypatch, dsm(high=90, date=date))
-        assert nws.resolve_known_high(88.0, now) == 88.0
+def test_in_summer_between_midnight_and_1am_edt_the_previous_climate_days_dsm_matches(monkeypatch):
+    # BUILD_SITE.md fix: the climate day is midnight to midnight LST all year, so 00:30 EDT (23:30 LST) is still
+    # the 14th: the 14th's DSM is today's, the 15th's is not (the old code required both calendars to agree).
+    now = datetime(2026, 7, 15, 4, 30, tzinfo=timezone.utc)
+    use_dsm(monkeypatch, dsm(high=90, date="2026-07-14"))
+    assert nws.resolve_known_high(88.0, now) == 90.0
+    use_dsm(monkeypatch, dsm(high=90, date="2026-07-15"))
+    assert nws.resolve_known_high(88.0, now) == 88.0
 
 
 # ── guards ────────────────────────────────────────────────────────────────────
@@ -216,19 +219,15 @@ def test_live_monitor_without_extra_sources_uses_the_lowest_possible_high(monkey
 
 
 def test_model_input_uses_the_resolved_high(monkeypatch):
-    import weather
     from kalshi_api import forecast
 
     now = _real_today_or_skip()
     obs = {"observed_at": (now - timedelta(minutes=5)).isoformat(), "temp_f": 84.2, "relative_humidity": 0.7,
            "cloud_fraction": 0.2, "wind_speed_mph": 5.0, "wind_dir_deg": 90.0, "pressure_hpa": 1015.0}
-    shared = {"metadata": {"status": "healthy", "source": "TEST"}, "current": obs, "recent_observations": [obs],
-              "today": {"high_f": 84.2}, "features": {"pressure_trend_hpa_per_hr": 0.1}}
-    monkeypatch.setattr(weather, "build_live_shared_input", lambda: shared)
     use_nws(monkeypatch, [(now - timedelta(minutes=30), 29.4)])
-    data, _ = forecast._fetch_hfmetar_shared()
-    assert data["asos_current"]["today_high_f"] == 85.0                # what every model script floors its paths at
-    assert data["asos_current"]["t0_f"] == 84.2
+    data = forecast._current_from_feed([obs], now)
+    assert data["today_high_f"] == 85.0                                # what the day-high forecast is floored at
+    assert data["t0_f"] == 84.2
 
 
 def test_the_recorded_high_is_not_pushed_up_by_a_rounded_up_current_reading(monkeypatch):
@@ -253,7 +252,7 @@ def test_the_strategy_uses_the_lowest_provable_high():
     assert alg._nws_known_high_f(87.8, 88.0) == 88                     # an exact whole-F bound wins
     assert alg._nws_known_high_f(84.2, 85.0) == 85
     assert alg._nws_known_high_f(None, None) is None
-    pdf = alg._compute_daily_high_pdf({}, alg._nws_known_high_f(87.8, None), {85: 0.2, 87: 0.5, 90: 0.3})
+    pdf = alg._compute_daily_high_pdf(alg._nws_known_high_f(87.8, None), {85: 0.2, 87: 0.5, 90: 0.3})
     assert min(pdf) == 87 and pdf[87] == pytest.approx(0.7)            # not 88: the 87-88 bucket keeps its mass at 87
 
 
@@ -374,7 +373,6 @@ def test_live_monitor_passes_the_raw_high_to_the_tracker(monkeypatch):
 
 
 def test_model_input_carries_the_raw_high(monkeypatch):
-    import weather
     from kalshi_api import forecast
     from kalshi_api import price_tracker as pt
 
@@ -383,14 +381,11 @@ def test_model_input_carries_the_raw_high(monkeypatch):
         monkeypatch.setattr(pt, name, None)
     obs = {"observed_at": (now - timedelta(minutes=5)).isoformat(), "temp_f": 84.2, "relative_humidity": 0.7,
            "cloud_fraction": 0.2, "wind_speed_mph": 5.0, "wind_dir_deg": 90.0, "pressure_hpa": 1015.0}
-    shared = {"metadata": {"status": "healthy", "source": "TEST"}, "current": obs, "recent_observations": [obs],
-              "today": {"high_f": 84.2}, "features": {"pressure_trend_hpa_per_hr": 0.1}}
-    monkeypatch.setattr(weather, "build_live_shared_input", lambda: shared)
     use_nws(monkeypatch, [(now - timedelta(minutes=30), 29.4)])
-    data, _ = forecast._fetch_hfmetar_shared()
-    assert data["asos_current"]["today_high_f"] == 85.0
-    assert data["asos_current"]["today_high_raw_f"] == pytest.approx(84.92)
-    forecast._apply_asos_current(data["asos_current"])
+    data = forecast._current_from_feed([obs], now)
+    assert data["today_high_f"] == 85.0
+    assert data["today_high_raw_f"] == pytest.approx(84.92)
+    forecast._apply_asos_current(data)
     assert pt.get_temp_snapshot()["daily_high_raw_f"] == pytest.approx(84.92)
 
 

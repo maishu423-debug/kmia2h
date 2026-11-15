@@ -41,7 +41,7 @@ HTTP_TIMEOUT_SEC = 15
 # with several viewers the upstream service still sees at most one listing request per TTL.
 DSM_TTL_SEC = 30
 DSM_LOOKBACK_PRODUCTS = 6      # newest products inspected when looking for the latest and the last final summary
-LST = timezone(timedelta(hours=-5), "LST")   # fixed offset: ASOS local standard time, never daylight saving
+from weather.climate_day import LST   # fixed UTC-5: ASOS local standard time, never daylight saving
 ET = ZoneInfo("America/New_York")
 DSM_MAX_EXCESS_F = 4.0         # an extra bound more than this above the HFMETAR high is treated as bad data
 NWS_READINGS_TTL_SEC = 30
@@ -288,10 +288,9 @@ def _todays_dsm_high(now):
     latest = (data or {}).get("latest")
     if not latest or latest.get("high_f") is None:
         return None, "no DSM published yet"
-    # The DSM day is midnight-to-midnight local STANDARD time; the HFMETAR high is for the Eastern calendar day.
-    # They only coincide from 1 AM EDT (summer), so require both to be today, otherwise it is another day's DSM.
-    today = {now.astimezone(LST).date().isoformat(), now.astimezone(ET).date().isoformat()}
-    if {latest["date"]} != today:
+    # The DSM day, the HFMETAR high and the market all use the climate day (midnight to midnight LST, all year).
+    today = now.astimezone(LST).date().isoformat()
+    if latest["date"] != today:
         return None, f"newest DSM is for {latest['date']}, not today"
     return latest, "ok"
 
@@ -328,7 +327,7 @@ def _nws_high_today(now):
     except Exception:
         _nws_fail_until = time.monotonic() + FLOOR_FAILURE_BACKOFF_SEC
         return None, None, "NWS readings unavailable"
-    start = max(_day_start(now, LST), _day_start(now, ET))
+    start = _day_start(now, LST)
     best = raw_best = None
     for when, celsius in data.get("readings", []):
         if when < start or when > now + timedelta(minutes=5):
