@@ -19,6 +19,23 @@ RULE = CFG.target.rounding
 OFF = 15  # bins floor(median) - OFF .. + OFF
 
 
+def save_model(model, side: str, name: str) -> None:
+    """The compressed copy of a MOS model (joblib, zlib level 3) that the live bundle carries in git.
+    The same pickle stream as the .pkl, compressed losslessly."""
+    import joblib
+    joblib.dump(model, path("models", f"mos_{side}_{name}.joblib"), compress=3)
+
+
+def load_model(side: str, name: str):
+    """models/mos_<side>_<name>.joblib (live bundle) if present, else the uncompressed .pkl."""
+    jp = path("models", f"mos_{side}_{name}.joblib")
+    if jp.exists():
+        import joblib
+        return joblib.load(jp)
+    with open(path("models", f"mos_{side}_{name}.pkl"), "rb") as fh:
+        return pickle.load(fh)
+
+
 def group_of(season, is_day) -> np.ndarray:
     return conformal.group_key(season, np.asarray(is_day).astype(str) == "True")
 
@@ -227,6 +244,7 @@ def main(tag: str = "v2", reuse: bool = False, use=(), name: str | None = None):
                         "crossed": int((np.diff(q_cal, axis=1) < 0).sum())}
         with open(mp, "wb") as fh:
             pickle.dump(model, fh)
+        save_model(model, side, name)
         for t, bst in model.boosters.items():
             bst.save_model(str(path("models", f"mos_{side}_{name}_q{int(round(t * 100)):02d}.lgb")))
         report[side]["conformal"] = conf
@@ -286,8 +304,7 @@ def frozen_probs(d: pd.DataFrame, samples: dict, name: str) -> dict:
         Sc = med + scale[:, None] * (S - med) + shift[:, None]
         for q in CFG.mos.physics_levels:
             d[f"{qp}_{q:02d}"] = np.quantile(Sc, q / 100.0, axis=1)
-        with open(path("models", f"mos_{side}_{name}.pkl"), "rb") as fh:
-            model = pickle.load(fh)
+        model = load_model(side, name)
         q_all = predict.predict_quantiles(model, d)
         q_cal = conformal.apply(q_all, groups, fz["conformal"], cfg)
         ks = (base[:, None] - OFF) + np.arange(2 * OFF + 1)[None, :]

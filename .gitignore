@@ -7,8 +7,15 @@ logs/
 out/**/*.png
 /store/
 *.egg-info/
-models/
+/models/*
 out/**/*.pkl
 !out/phase9/worst/*.png
 /out/live/
 /out/live_scores.parquet
+
+# ---- live bundle (README.md "Live bundle"): what run.py needs, nothing else ----
+!/config.yaml
+!/params/
+!/params/*.json
+!/models/mos_high_s9_sb03.joblib
+!/models/mos_low_s9_sb03.joblib
